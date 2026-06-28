@@ -31,6 +31,7 @@ enabled = false
 source_km = "D:\\Project\\MHScript\\Tool\\开包.km"
 no_find_limit = 1800
 click_offset_x = 10
+match_threshold = 1.00
 confirm_images = [
     "UI\\Yes.bmp",
     "UI\\OK.bmp",

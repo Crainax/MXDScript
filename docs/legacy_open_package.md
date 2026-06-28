@@ -77,11 +77,20 @@
 
 ## Python 迁移要点
 
-- `FindPic` 应迁移为 `vision.match_any(images, region, threshold=1.0)`。
-- `KeyPress Enter` 应迁移为易键鼠 `M_KeyPress2(handle, 13, 1)`。
-- `LeftClick` 应迁移为易键鼠 `M_LeftClick(handle, 1)`。
-- `DelayRandom 240,330` 可优先用 Python `random.uniform` + `time.sleep`，或调用 `M_DelayRandom`。
-- 需要记录每次识图和动作日志，尤其是匹配坐标、阶段变量 `c`、`noFindCount` 和退出原因。
+- `FindPic` 已迁移为 `TemplateMatcher.match_any(ImageGroup, Region)`。
+- `KeyPress Enter` 已迁移为易键鼠 `M_KeyPress2(handle, 13, 1)`，dry-run 时只记录动作。
+- `LeftClick` 已迁移为易键鼠 `M_LeftClick(handle, 1)`，dry-run 时只记录动作。
+- `DelayRandom 240,330` 由 Python `Sleeper.delay_random_ms` 实现，便于测试时跳过真实等待。
+- 已记录每次识图和动作日志，包含匹配坐标、图片组、阶段变量 `next_after_confirm`、`noFindCount` 和退出原因。
+
+## Python 实现位置
+
+- 入口：`src/mhscript_yjs/scripts/tool/open_package.py`
+- 易键鼠封装：`src/mhscript_yjs/drivers/yjs.py`
+- Dry-run 设备：`src/mhscript_yjs/drivers/dry_run.py`
+- 截图/模板匹配：`src/mhscript_yjs/vision/screenshot.py`、`src/mhscript_yjs/vision/matcher.py`
+- MapleStory 客户区定位：`src/mhscript_yjs/windows/maple.py`
+- 状态机测试：`tests/test_open_package.py`
 
 ## 需要确认的风险点
 

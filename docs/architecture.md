@@ -17,20 +17,21 @@
 ```text
 src/mhscript_yjs/
   drivers/
-    yjs.py              # planned: ctypes wrapper for msdk.dll
-    keycodes.py         # planned: Windows VK code mapping
+    yjs.py              # ctypes wrapper for msdk.dll
+    dry_run.py          # no-hardware action recorder
+    keycodes.py         # Windows VK code mapping
   vision/
-    matcher.py          # planned: OpenCV template matching
-    screenshot.py       # planned: mss screenshot capture
+    matcher.py          # OpenCV template matching
+    screenshot.py       # mss screenshot capture
+    types.py            # Region/ImageGroup/MatchResult
   windows/
-    maple.py            # planned: find MapleStory window and bounds
+    maple.py            # find MapleStory window and client bounds
   runtime/
-    logging.py          # planned: rotating file + console logs
-    timing.py           # planned: delay and random delay helpers
-    context.py          # planned: shared runtime dependencies
+    logging.py          # rotating file + console logs
+    timing.py           # delay and random delay helpers
   scripts/
     tool/
-      open_package.py   # planned after architecture confirmation
+      open_package.py   # migrated Tool/开包.km state machine
 ```
 
 ## 日志策略
@@ -63,9 +64,9 @@ logs/open_package_YYYYMMDD_HHMMSS.log
 ## 当前不做的事
 
 - 不改动旧仓库 `D:\Project\MHScript`。
-- 不复制或提交 `msdk.dll`、`.lib`、`.h` 等资料库二进制/头文件。
+- 不提交 `msdk.dll`、`.lib`、`.h` 等资料库二进制/头文件。
 - 不迁移大型角色循环脚本。
-- 不开始 `开包.km` 的 Python 实现，等架构确认后再动手。
+- 不直接实机控制易键鼠，除非显式传入 `--live`。
 
 ## 本轮用户确认
 
@@ -77,4 +78,4 @@ logs/open_package_YYYYMMDD_HHMMSS.log
 
 ## 下一步建议
 
-先实现一个小的 `device_probe`：尝试 `M_Open(1)`、`M_ScanAndOpen()`，如果打开成功就读取当前 VID/PID 和设备序列号写入日志。这样可以替你确认设备打开方式与 VID/PID，避免靠猜。
+第一版 `Tool/开包.km` 迁移已经实现。下一步建议先用 dry-run 运行一次，确认窗口、截图和模板匹配日志正常；再实现一个小的 `device_probe`，自动尝试 `M_Open(1)`、`M_ScanAndOpen()` 并记录 VID/PID；最后用 `--live` 小范围实测易键鼠动作和坐标。

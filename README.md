@@ -4,7 +4,7 @@
 
 项目目标位置：`D:\Project\MXDScript`。
 
-当前阶段只做了项目初始化、资料研读和 `D:\Project\MHScript\Tool\开包.km` 的行为分析，尚未开始转换实现。
+当前阶段已经完成 `D:\Project\MHScript\Tool\开包.km` 的第一版 Python 迁移实现。默认运行是 dry-run：会找 MapleStory 窗口、截图、找图并写日志，但不会控制易键鼠；加 `--live` 后才会打开设备并发送键鼠动作。
 
 ## 已确认的旧项目结构
 
@@ -32,6 +32,31 @@ tests/                  单元测试与可离线验证的状态机测试
 vendor/msdk/            本机放置 msdk.dll 的位置，不提交 DLL
 ```
 
+## 开包脚本运行方式
+
+首次运行前先安装依赖，建议用项目内虚拟环境：
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python -m pip install -e .
+```
+
+在项目目录 `D:\Project\MXDScript` 下运行：
+
+```powershell
+$env:PYTHONPATH='src'
+python -m mhscript_yjs.scripts.tool.open_package --skip-delays --max-iterations 1
+```
+
+上面是 dry-run 诊断模式，不会控制键鼠。真正连接易键鼠运行时使用：
+
+```powershell
+$env:PYTHONPATH='src'
+python -m mhscript_yjs.scripts.tool.open_package --live
+```
+
+每次运行会在 `logs/open_package_YYYYMMDD_HHMMSS.log` 写详细日志。dry-run 仍然需要游戏窗口可见，也需要安装 `mss`、`numpy`、`opencv-python` 等依赖，因为截图和找图由 Python 完成。
+
 ## 后续实现原则
 
 - 旧 KM 里的找图、按键、点击、延迟行为先逐条建模，再写 Python。
@@ -45,5 +70,13 @@ vendor/msdk/            本机放置 msdk.dll 的位置，不提交 DLL
 - Python 位数：当前检测为 64-bit，实机运行应配套 64 位 `msdk.dll`。
 - 游戏窗口大小可能变化，但游戏画面像素模板稳定。
 - 设备打开方式与 VID/PID 尚待用探测脚本确认；单头且只插一个盒子时，可先尝试 `M_Open(1)` 或 `M_ScanAndOpen()`。
+
+## 已实现模块
+
+- `drivers.yjs`: `msdk.dll` 的 ctypes 封装，支持打开设备、设置绝对移动分辨率、移动、左键、Enter 和释放按键。
+- `drivers.dry_run`: 记录动作但不控制硬件，便于先看状态机和日志。
+- `windows.maple`: 按标题片段查找窗口，并读取客户区坐标和尺寸。
+- `vision.matcher`: 对应旧 `FindPic` 的模板匹配，支持四角同色透明规则。
+- `scripts.tool.open_package`: 对应 `Tool/开包.km` 的状态机迁移。
 
 更多细节见 `docs/architecture.md`、`docs/legacy_open_package.md` 和 `docs/questions_for_user.md`。

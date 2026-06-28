@@ -95,11 +95,11 @@ class YjsDevice:
             self.logger.info("key_press key_code=%s count=%s", key_code, count)
 
     def move_to(self, x: int, y: int, *, smooth: bool = True) -> None:
-        api_name = "M_MoveTo3" if smooth else "M_MoveTo3_D"
+        api_name = self._choose_move_api(x, y, smooth=smooth)
         result = getattr(self._dll_checked(), api_name)(self.handle, x, y)
-        self._check(api_name, result)
+        self._check(api_name, result, x=x, y=y)
         if self.logger:
-            self.logger.info("mouse_move x=%s y=%s smooth=%s", x, y, smooth)
+            self.logger.info("mouse_move api=%s x=%s y=%s smooth=%s", api_name, x, y, smooth)
 
     def left_click(self, count: int = 1) -> None:
         result = self._dll_checked().M_LeftClick(self.handle, count)
@@ -140,9 +140,42 @@ class YjsDevice:
         except Exception as exc:  # pragma: no cover - diagnostics only
             self.logger.warning("failed_to_read_vid_pid error=%r", exc)
 
-    def _check(self, api_name: str, result: int) -> None:
+    def _choose_move_api(self, x: int, y: int, *, smooth: bool) -> str:
+        configured = self.settings.move_api.lower()
+        if configured == "move_to2":
+            return "M_MoveTo2"
+        if configured == "move_to3":
+            return "M_MoveTo3" if smooth else "M_MoveTo3_D"
+        if configured != "auto":
+            raise YjsError(f"Unsupported yjs.move_api: {self.settings.move_api}")
+
+        outside_configured_screen = (
+            x < 0
+            or y < 0
+            or x >= self.settings.screen_width
+            or y >= self.settings.screen_height
+        )
+        if outside_configured_screen:
+            if self.logger:
+                self.logger.info(
+                    "move_api_auto_fallback api=M_MoveTo2 x=%s y=%s configured_screen=%sx%s",
+                    x,
+                    y,
+                    self.settings.screen_width,
+                    self.settings.screen_height,
+                )
+            return "M_MoveTo2"
+        return "M_MoveTo3" if smooth else "M_MoveTo3_D"
+
+    def _check(self, api_name: str, result: int, *, x: int | None = None, y: int | None = None) -> None:
         if result != 0:
-            raise YjsError(f"{api_name} failed with result={result}")
+            detail = f"{api_name} failed with result={result}"
+            if x is not None and y is not None:
+                detail += (
+                    f" at x={x}, y={y}, configured_screen="
+                    f"{self.settings.screen_width}x{self.settings.screen_height}"
+                )
+            raise YjsError(detail)
 
     @staticmethod
     def _declare_api(dll: ctypes.WinDLL) -> None:
@@ -176,6 +209,8 @@ class YjsDevice:
         dll.M_LeftClick.argtypes = [handle, int_arg]
         dll.M_ResolutionUsed.restype = int_arg
         dll.M_ResolutionUsed.argtypes = [handle, int_arg, int_arg]
+        dll.M_MoveTo2.restype = int_arg
+        dll.M_MoveTo2.argtypes = [handle, int_arg, int_arg]
         dll.M_MoveTo3.restype = int_arg
         dll.M_MoveTo3.argtypes = [handle, int_arg, int_arg]
         dll.M_MoveTo3_D.restype = int_arg

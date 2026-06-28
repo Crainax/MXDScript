@@ -10,6 +10,7 @@ from mhscript_yjs.drivers.base import InputDevice
 from mhscript_yjs.drivers.dry_run import DryRunDevice
 from mhscript_yjs.drivers.keycodes import VK_ENTER
 from mhscript_yjs.drivers.yjs import YjsDevice
+from mhscript_yjs.runtime.control import NullRunControl, RunControl, StopRequested
 from mhscript_yjs.runtime.logging import setup_script_logger
 from mhscript_yjs.runtime.timing import NullSleeper, Sleeper
 from mhscript_yjs.vision.matcher import TemplateMatcher
@@ -42,6 +43,7 @@ class OpenPackageRunner:
         sleeper: Sleeper,
         logger: logging.Logger,
         window_info: WindowInfo | None = None,
+        control: RunControl | None = None,
     ) -> None:
         self.config = config
         self.device = device
@@ -49,6 +51,7 @@ class OpenPackageRunner:
         self.sleeper = sleeper
         self.logger = logger
         self.window_info = window_info
+        self.control = control or NullRunControl()
         self.groups = build_groups(config)
         self.next_after_confirm = 2
         self.no_find_count = 0
@@ -71,6 +74,7 @@ class OpenPackageRunner:
         try:
             self.device.open()
             while True:
+                self._checkpoint()
                 if max_iterations is not None and iterations >= max_iterations:
                     return self._result("iteration_limit", iterations)
                 iterations += 1
@@ -82,15 +86,15 @@ class OpenPackageRunner:
                     self.next_after_confirm,
                 )
 
-                confirm = self.matcher.match_any(self.groups.confirm, region)
+                confirm = self._match_any(self.groups.confirm, region)
                 if confirm:
                     self._handle_confirm(confirm, region)
                 else:
-                    jing = self.matcher.match_any(self.groups.jing, region)
+                    jing = self._match_any(self.groups.jing, region)
                     if jing:
                         self._handle_jing(jing, region)
                     else:
-                        shi = self.matcher.match_any(self.groups.shi, region)
+                        shi = self._match_any(self.groups.shi, region)
                         if shi:
                             self._handle_shi(shi, region)
                         else:
@@ -107,10 +111,14 @@ class OpenPackageRunner:
         except KeyboardInterrupt:
             self.logger.warning("interrupted_by_user iterations=%s", iterations)
             return self._result("keyboard_interrupt", iterations)
+        except StopRequested:
+            self.logger.info("stop_requested iterations=%s", iterations)
+            return self._result("stop_requested", iterations)
         finally:
             self.device.close()
 
     def _handle_confirm(self, match: MatchResult, region: Region) -> None:
+        self._checkpoint()
         self.logger.info(
             "stage=confirm image=%s x=%s y=%s score=%.6f next_after_confirm=%s",
             match.image_path,
@@ -119,6 +127,7 @@ class OpenPackageRunner:
             match.score,
             self.next_after_confirm,
         )
+        self._checkpoint()
         self.device.press_key(VK_ENTER, 1)
         self.sleeper.delay_random_ms(
             self.config.timing.confirm_delay_min_ms,
@@ -142,6 +151,7 @@ class OpenPackageRunner:
             )
 
     def _handle_jing(self, match: MatchResult, region: Region) -> None:
+        self._checkpoint()
         self.logger.info(
             "stage=jing image=%s x=%s y=%s score=%.6f",
             match.image_path,
@@ -159,6 +169,7 @@ class OpenPackageRunner:
             self.logger.info("jing_followup_confirm_not_found no_find_count=%s", self.no_find_count)
 
     def _handle_shi(self, match: MatchResult, region: Region) -> None:
+        self._checkpoint()
         self.logger.info(
             "stage=shi image=%s x=%s y=%s score=%.6f",
             match.image_path,
@@ -186,6 +197,7 @@ class OpenPackageRunner:
             matched.y,
             matched.score,
         )
+        self._checkpoint()
         self.device.press_key(VK_ENTER, 1)
         self.sleeper.delay_random_ms(
             self.config.timing.confirm_delay_min_ms,
@@ -195,7 +207,8 @@ class OpenPackageRunner:
 
     def _wait_for_group(self, group: ImageGroup, region: Region) -> MatchResult | None:
         for attempt in range(1, 11):
-            match = self.matcher.match_any(group, region)
+            self._checkpoint()
+            match = self._match_any(group, region)
             if match:
                 self.logger.debug("wait_group_found group=%s attempt=%s", group.name, attempt)
                 return match
@@ -204,6 +217,7 @@ class OpenPackageRunner:
         return None
 
     def _click_match(self, match: MatchResult) -> None:
+        self._checkpoint()
         x = match.x + self.config.open_package.click_offset_x
         y = match.y
         self.logger.info(
@@ -216,8 +230,10 @@ class OpenPackageRunner:
             match.y,
             self.config.open_package.click_offset_x,
         )
+        self._checkpoint()
         self.device.move_to(x, y, smooth=True)
         self.sleeper.delay_ms(self.config.timing.post_move_delay_ms)
+        self._checkpoint()
         self.device.left_click(1)
         self.sleeper.delay_random_ms(
             self.config.timing.confirm_delay_min_ms,
@@ -233,14 +249,23 @@ class OpenPackageRunner:
         self.logger.info("open_package_exit %s", result)
         return result
 
+    def _match_any(self, group: ImageGroup, region: Region) -> MatchResult | None:
+        self._checkpoint()
+        return self.matcher.match_any(group, region)
+
+    def _checkpoint(self) -> None:
+        self.control.wait_if_paused()
+        if self.control.stop_requested():
+            raise StopRequested("stop requested")
+
 
 def build_groups(config: ProjectConfig) -> OpenPackageGroups:
     image_root = config.maple_story.image_root
     settings = config.open_package
     return OpenPackageGroups(
-        confirm=_group("confirm", image_root, settings.confirm_images, settings.match_threshold),
-        jing=_group("jing", image_root, settings.jing_images, settings.match_threshold),
-        shi=_group("shi", image_root, settings.shi_images, settings.match_threshold),
+        confirm=_group("confirm", image_root, settings.confirm_images, settings.confirm_match_threshold),
+        jing=_group("jing", image_root, settings.jing_images, settings.event_match_threshold),
+        shi=_group("shi", image_root, settings.shi_images, settings.event_match_threshold),
     )
 
 
@@ -258,6 +283,7 @@ def create_runner(
     dry_run: bool,
     skip_delays: bool,
     logger: logging.Logger,
+    control: RunControl | None = None,
 ) -> OpenPackageRunner:
     try:
         capture = MssScreenCapture()
@@ -270,13 +296,19 @@ def create_runner(
         ) from exc
     matcher = TemplateMatcher(capture=capture, logger=logger)
     device: InputDevice = DryRunDevice(logger=logger) if dry_run else YjsDevice(config.yjs, logger=logger)
-    sleeper: Sleeper = NullSleeper(logger=logger) if skip_delays else Sleeper(logger=logger)
+    run_control = control or NullRunControl()
+    sleeper: Sleeper = (
+        NullSleeper(logger=logger, control=run_control)
+        if skip_delays
+        else Sleeper(logger=logger, control=run_control)
+    )
     return OpenPackageRunner(
         config=config,
         device=device,
         matcher=matcher,
         sleeper=sleeper,
         logger=logger,
+        control=run_control,
     )
 
 
@@ -322,7 +354,12 @@ def main(argv: list[str] | None = None) -> int:
         logger=logger,
     )
     result = runner.run(max_iterations=args.max_iterations)
-    return 0 if result.exit_reason in {"no_find_limit", "iteration_limit", "keyboard_interrupt"} else 1
+    return 0 if result.exit_reason in {
+        "no_find_limit",
+        "iteration_limit",
+        "keyboard_interrupt",
+        "stop_requested",
+    } else 1
 
 
 if __name__ == "__main__":

@@ -43,15 +43,28 @@ class TemplateMatcher:
                 best = result
 
         elapsed_ms = (time.perf_counter() - start) * 1000
+        accepted = best if best and best.score >= group.threshold - 1e-9 else None
         if self.logger:
-            if best:
+            if accepted:
                 self.logger.debug(
-                    "findpic group=%s matched=%s x=%s y=%s score=%.6f elapsed_ms=%.2f",
+                    "findpic group=%s accepted=%s x=%s y=%s score=%.6f threshold=%.6f elapsed_ms=%.2f",
+                    group.name,
+                    accepted.image_path,
+                    accepted.x,
+                    accepted.y,
+                    accepted.score,
+                    group.threshold,
+                    elapsed_ms,
+                )
+            elif best:
+                self.logger.debug(
+                    "findpic group=%s below_threshold=%s x=%s y=%s score=%.6f threshold=%.6f elapsed_ms=%.2f",
                     group.name,
                     best.image_path,
                     best.x,
                     best.y,
                     best.score,
+                    group.threshold,
                     elapsed_ms,
                 )
             else:
@@ -61,7 +74,7 @@ class TemplateMatcher:
                     group.threshold,
                     elapsed_ms,
                 )
-        return best if best and best.score >= group.threshold - 1e-9 else None
+        return accepted
 
     def _load_template(self, image_path: Path) -> tuple[object, object | None]:
         image_path = image_path.resolve()
@@ -73,7 +86,9 @@ class TemplateMatcher:
         import cv2
         import numpy as np
 
-        template = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
+        # cv2.imread cannot reliably open Unicode/reparse-point paths on Windows.
+        # Reading bytes through Python first keeps paths such as OneDrive Chinese folders working.
+        template = cv2.imdecode(np.fromfile(image_path, dtype=np.uint8), cv2.IMREAD_COLOR)
         if template is None:
             raise TemplateNotFoundError(f"Template image could not be read: {image_path}")
 

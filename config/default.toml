@@ -1,6 +1,6 @@
 [app]
 name = "mhscript-yjs"
-log_level = "DEBUG"
+log_level = "INFO"
 log_dir = "logs"
 
 [maple_story]
@@ -19,6 +19,10 @@ pid = "0x0301"
 screen_width = 1920
 screen_height = 1080
 absolute_move = true
+# auto: use M_MoveTo3 inside configured resolution, fall back to M_MoveTo2 for multi-monitor coordinates.
+# move_to2: always use same-machine coordinate movement.
+# move_to3: always use absolute movement after M_ResolutionUsed.
+move_api = "auto"
 
 [timing]
 post_move_delay_ms = 90
@@ -32,6 +36,8 @@ source_km = "D:\\Project\\MHScript\\Tool\\开包.km"
 no_find_limit = 1800
 click_offset_x = 10
 match_threshold = 1.00
+confirm_match_threshold = 0.93
+event_match_threshold = 0.99
 confirm_images = [
     "UI\\Yes.bmp",
     "UI\\OK.bmp",

@@ -23,9 +23,13 @@ dev = [
     "pytest>=8.2.0",
     "ruff>=0.5.0",
 ]
+build = [
+    "pyinstaller>=6.14.0",
+]
 
 [project.scripts]
 mhscript-yjs = "mhscript_yjs.cli:main"
+mhscript-yjs-open-package-gui = "mhscript_yjs.gui.open_package_gui:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

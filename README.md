@@ -34,6 +34,35 @@ vendor/msdk/            本机放置 msdk.dll 的位置，不提交 DLL
 
 ## 开包脚本运行方式
 
+### GUI exe
+
+已提供一键测试 GUI，打包输出位置：
+
+```text
+D:\Project\MXDScript\dist\MXDScriptOpenPackage\MXDScriptOpenPackage.exe
+```
+
+双击后只有一个主按钮：
+
+- `开始`: 启动开包脚本，默认是易键鼠 live 模式，会实际控制硬件。
+- `暂停`: 运行中点击同一个按钮会实时暂停。
+- `继续`: 暂停后点击同一个按钮继续运行。
+
+也可以按 `F10` 全局快捷键开始/暂停/继续。窗口不在前台时也会响应。
+
+live 模式启动时会自动关闭 Windows 鼠标设置里的“提高指针精确度”；暂停、停止或结束时会恢复启动前的鼠标设置。
+
+关闭窗口会请求停止脚本并释放设备。日志写入 exe 同目录下的 `logs/`，配置文件和 DLL 位于 exe 同目录下的 `config/` 与 `vendor/msdk/`。
+
+重新打包命令：
+
+```powershell
+cd D:\Project\MXDScript
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build_open_package_gui.ps1
+```
+
+### 命令行
+
 首次运行前先安装依赖，建议用项目内虚拟环境：
 
 ```powershell

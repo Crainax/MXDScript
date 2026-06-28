@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import sys
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -31,6 +32,7 @@ class YjsSettings:
     screen_width: int
     screen_height: int
     absolute_move: bool
+    move_api: str
 
 
 @dataclass(frozen=True)
@@ -48,6 +50,8 @@ class OpenPackageSettings:
     no_find_limit: int
     click_offset_x: int
     match_threshold: float
+    confirm_match_threshold: float
+    event_match_threshold: float
     confirm_images: tuple[str, ...]
     jing_images: tuple[str, ...]
     shi_images: tuple[str, ...]
@@ -64,6 +68,8 @@ class ProjectConfig:
 
 
 def project_root() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
     return Path(__file__).resolve().parents[3]
 
 
@@ -126,6 +132,7 @@ def _to_project_config(data: dict[str, Any], root: Path) -> ProjectConfig:
             screen_width=int(yjs["screen_width"]),
             screen_height=int(yjs["screen_height"]),
             absolute_move=bool(yjs["absolute_move"]),
+            move_api=str(yjs.get("move_api", "auto")),
         ),
         timing=TimingSettings(
             post_move_delay_ms=int(timing["post_move_delay_ms"]),
@@ -139,6 +146,18 @@ def _to_project_config(data: dict[str, Any], root: Path) -> ProjectConfig:
             no_find_limit=int(open_package["no_find_limit"]),
             click_offset_x=int(open_package["click_offset_x"]),
             match_threshold=float(open_package.get("match_threshold", 1.0)),
+            confirm_match_threshold=float(
+                open_package.get(
+                    "confirm_match_threshold",
+                    open_package.get("match_threshold", 1.0),
+                )
+            ),
+            event_match_threshold=float(
+                open_package.get(
+                    "event_match_threshold",
+                    open_package.get("match_threshold", 1.0),
+                )
+            ),
             confirm_images=tuple(str(item) for item in open_package["confirm_images"]),
             jing_images=tuple(str(item) for item in open_package["jing_images"]),
             shi_images=tuple(str(item) for item in open_package["shi_images"]),

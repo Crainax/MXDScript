@@ -10,11 +10,28 @@ if (Test-Path $VenvPython) {
     $Python = "python"
 }
 
+$ExistingExe = Join-Path $ProjectRoot "dist\MXDScriptOpenPackage\MXDScriptOpenPackage.exe"
+if (Test-Path $ExistingExe) {
+    $ExistingExePath = (Resolve-Path $ExistingExe).Path
+    $RunningProcesses = Get-Process -Name "MXDScriptOpenPackage" -ErrorAction SilentlyContinue | Where-Object {
+        try {
+            $_.Path -ieq $ExistingExePath
+        } catch {
+            $false
+        }
+    }
+    if ($RunningProcesses) {
+        $ProcessIds = ($RunningProcesses | ForEach-Object { $_.Id }) -join ", "
+        throw "MXDScriptOpenPackage.exe is still running from dist (PID: $ProcessIds). Close it before rebuilding."
+    }
+}
+
 & $Python -m PyInstaller `
     --noconfirm `
     --clean `
     --onedir `
     --windowed `
+    --uac-admin `
     --name MXDScriptOpenPackage `
     --paths (Join-Path $ProjectRoot "src") `
     (Join-Path $ProjectRoot "src\mhscript_yjs\gui\open_package_gui.py")

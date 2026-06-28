@@ -56,7 +56,7 @@ def normalize_shortcut(value: str) -> str:
     if key is None:
         raise ShortcutError("快捷键缺少主键")
     if key == "Esc":
-        raise ShortcutError("Esc 是暂停/停止快捷键，不能作为启动快捷键")
+        raise ShortcutError("Esc 不能作为启动快捷键")
 
     if _is_function_key(key):
         ordered = [modifier for modifier in MODIFIER_ORDER if modifier in modifiers]

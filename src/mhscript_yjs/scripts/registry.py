@@ -50,7 +50,7 @@ def get_script_definitions() -> tuple[ScriptDefinition, ...]:
             id="open_package",
             name="自动开包",
             category="工具",
-            description="自动识别确认、精、石图片并执行点击/回车流程。",
+            description="自动开怪怪卡牌包并转成精华",
             module="mhscript_yjs.scripts.tool.open_package",
             default_shortcut="F10",
             runner=_run_open_package,

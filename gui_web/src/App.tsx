@@ -45,7 +45,6 @@ import type {
   ThemePreference,
 } from "./types";
 
-const ESC_DOUBLE_PRESS_MS = 650;
 const MAX_LOG_LINES = 800;
 
 export function App() {
@@ -58,7 +57,6 @@ export function App() {
   const [dryRun, setDryRun] = useState(false);
   const [skipDelays, setSkipDelays] = useState(false);
   const [optionsLoaded, setOptionsLoaded] = useState(false);
-  const lastEscAt = useRef(0);
   const logId = useRef(1);
 
   useEffect(() => {
@@ -220,48 +218,21 @@ export function App() {
     }
   }, [applyRuntime]);
 
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (!runtime || !settings || editingShortcutId) {
-        return;
-      }
-
-      if (event.key === "Escape") {
-        const now = Date.now();
-        if (!runtime.activeScriptId) {
-          return;
-        }
-        event.preventDefault();
-        if (now - lastEscAt.current <= ESC_DOUBLE_PRESS_MS) {
-          lastEscAt.current = 0;
-          void runStop();
-          return;
-        }
-        lastEscAt.current = now;
-        void runPause();
-        return;
-      }
-
-      if (isTypingTarget(event.target)) {
-        return;
-      }
-    };
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [editingShortcutId, runPause, runStart, runStop, runtime, settings]);
-
   const handleShortcutCapture = useCallback(
     async (scriptId: string, event: ReactKeyboardEvent<HTMLButtonElement>) => {
       event.preventDefault();
       event.stopPropagation();
+      if (event.nativeEvent.key === "Escape") {
+        setMessage("Esc 不能作为启动快捷键。");
+        return;
+      }
       const shortcut = shortcutFromKeyboardEvent(event.nativeEvent, { allowEsc: false });
       if (!shortcut) {
         setMessage("启动快捷键需要使用 F1-F12，或 Ctrl/Alt/Shift 搭配字母、数字、F键。");
         return;
       }
       if (shortcut === "Esc") {
-        setMessage("Esc 已固定为暂停/停止，不能作为启动快捷键。");
+        setMessage("Esc 不能作为启动快捷键。");
         return;
       }
       if (!settings) {
@@ -476,10 +447,6 @@ function ScriptControlPanel(props: {
           <dt>启动快捷键</dt>
           <dd>{props.shortcut}</dd>
         </div>
-        <div>
-          <dt>停止快捷键</dt>
-          <dd>Esc</dd>
-        </div>
       </dl>
       <div className="button-row">
         <button type="button" className="primary-button" disabled={!canStart} onClick={props.onStart}>
@@ -657,18 +624,6 @@ function normalizeEventKey(key: string): string | null {
     return key.toUpperCase();
   }
   return null;
-}
-
-function isTypingTarget(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) {
-    return false;
-  }
-  return (
-    target.tagName === "INPUT" ||
-    target.tagName === "TEXTAREA" ||
-    target.tagName === "SELECT" ||
-    target.isContentEditable
-  );
 }
 
 function readStoredTheme(fallback: ThemePreference): ThemePreference {

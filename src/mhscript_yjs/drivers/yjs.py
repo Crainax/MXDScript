@@ -13,6 +13,10 @@ class YjsError(RuntimeError):
     pass
 
 
+class YjsDeviceNotFoundError(YjsError):
+    pass
+
+
 @dataclass
 class YjsDevice:
     settings: YjsSettings
@@ -44,11 +48,7 @@ class YjsDevice:
         self._declare_api(self._dll)
         self._handle = self._open_handle(self._dll)
         if self._is_invalid_handle(self._handle):
-            raise YjsError(
-                "Failed to open YiJianShu device "
-                f"(mode={self.settings.open_mode}, port={self.settings.port}, "
-                f"vid=0x{self.settings.vid:04X}, pid=0x{self.settings.pid:04X})"
-            )
+            raise YjsDeviceNotFoundError(self._hardware_not_found_message())
 
         if self.settings.absolute_move:
             self._check(
@@ -169,6 +169,10 @@ class YjsDevice:
 
     def _check(self, api_name: str, result: int, *, x: int | None = None, y: int | None = None) -> None:
         if result != 0:
+            if result in {-1, 0xFFFFFFFF}:
+                raise YjsDeviceNotFoundError(
+                    f"{self._hardware_not_found_message()} 调用={api_name}。"
+                )
             detail = f"{api_name} failed with result={result}"
             if x is not None and y is not None:
                 detail += (
@@ -176,6 +180,14 @@ class YjsDevice:
                     f"{self.settings.screen_width}x{self.settings.screen_height}"
                 )
             raise YjsError(detail)
+
+    def _hardware_not_found_message(self) -> str:
+        return (
+            "未发现硬件：无法打开易键鼠设备。"
+            f"请检查硬件连接、驱动状态和配置"
+            f"（mode={self.settings.open_mode}, port={self.settings.port}, "
+            f"vid=0x{self.settings.vid:04X}, pid=0x{self.settings.pid:04X}）。"
+        )
 
     @staticmethod
     def _declare_api(dll: ctypes.WinDLL) -> None:

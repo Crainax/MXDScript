@@ -3,10 +3,12 @@ from __future__ import annotations
 import logging
 import queue
 import threading
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 from mhscript_yjs.core.config import load_config
+from mhscript_yjs.drivers.yjs import YjsDeviceNotFoundError
 from mhscript_yjs.runtime.app_paths import logs_dir
 from mhscript_yjs.runtime.control import PauseController
 from mhscript_yjs.runtime.logging import (
@@ -21,6 +23,7 @@ from mhscript_yjs.scripts.registry import ScriptDefinition, ScriptRunContext, ge
 
 
 Event = dict[str, Any]
+MousePrecisionFactory = Callable[[logging.Logger], MousePointerPrecisionManager]
 
 
 class ScriptEventHandler(logging.Handler):
@@ -41,7 +44,12 @@ class ScriptEventHandler(logging.Handler):
 
 
 class ScriptManager:
-    def __init__(self, definitions: tuple[ScriptDefinition, ...] | None = None) -> None:
+    def __init__(
+        self,
+        definitions: tuple[ScriptDefinition, ...] | None = None,
+        *,
+        mouse_precision_factory: MousePrecisionFactory | None = None,
+    ) -> None:
         self.definitions = definitions or get_script_definitions()
         self._definitions_by_id = {definition.id: definition for definition in self.definitions}
         self._lock = threading.RLock()
@@ -52,6 +60,10 @@ class ScriptManager:
         self._active_script_id: str | None = None
         self._controller: PauseController | None = None
         self._worker: threading.Thread | None = None
+        self._mouse_precision_factory = mouse_precision_factory or (
+            lambda logger: MousePointerPrecisionManager(logger=logger)
+        )
+        self._mouse_precision: MousePointerPrecisionManager | None = None
 
     def snapshot(self) -> dict[str, Any]:
         with self._lock:
@@ -111,7 +123,9 @@ class ScriptManager:
             self._controller.pause()
             self._states[self._active_script_id] = "paused"
             script_id = self._active_script_id
+            mouse_precision = self._mouse_precision
 
+        self._restore_mouse_precision(script_id, mouse_precision)
         self._emit_state(script_id, "paused")
         return self.snapshot()
 
@@ -121,9 +135,19 @@ class ScriptManager:
                 return self.snapshot()
             if self._states[self._active_script_id] != "paused":
                 return self.snapshot()
-            self._controller.resume()
-            self._states[self._active_script_id] = "running"
             script_id = self._active_script_id
+            controller = self._controller
+            mouse_precision = self._mouse_precision
+
+        self._disable_mouse_precision(script_id, mouse_precision)
+
+        with self._lock:
+            if self._active_script_id != script_id or self._controller is not controller:
+                return self.snapshot()
+            if self._states[script_id] != "paused":
+                return self.snapshot()
+            controller.resume()
+            self._states[script_id] = "running"
 
         self._emit_state(script_id, "running")
         return self.snapshot()
@@ -137,7 +161,9 @@ class ScriptManager:
                 return self.snapshot()
             self._controller.stop()
             self._states[script_id] = "stopping"
+            mouse_precision = self._mouse_precision
 
+        self._restore_mouse_precision(script_id, mouse_precision)
         self._emit_state(script_id, "stopping")
         return self.snapshot()
 
@@ -187,8 +213,13 @@ class ScriptManager:
             )
 
             if definition.requires_mouse_precision and not dry_run:
-                mouse_precision = MousePointerPrecisionManager(logger=logger)
-                mouse_precision.disable_temporarily()
+                mouse_precision = self._mouse_precision_factory(logger)
+                with self._lock:
+                    if self._active_script_id == script_id:
+                        self._mouse_precision = mouse_precision
+                    should_disable_mouse = self._states[script_id] == "running"
+                if should_disable_mouse:
+                    self._disable_mouse_precision(script_id, mouse_precision)
 
             context = ScriptRunContext(
                 config=config,
@@ -219,12 +250,13 @@ class ScriptManager:
             self._events.put({"type": "finished", "scriptId": script_id, "result": payload})
             self._emit_state(script_id, "finished")
         except Exception as exc:
+            message = _format_exception_message(exc)
             if logger is not None:
-                logger.exception("脚本异常退出：%s", exc)
+                logger.exception("脚本异常退出：%s", message)
             with self._lock:
                 self._last_results[script_id] = {
                     "exitReason": "error",
-                    "error": f"{exc.__class__.__name__}: {exc}",
+                    "error": message,
                 }
                 self._states[script_id] = "error"
                 self._active_script_id = None
@@ -234,22 +266,15 @@ class ScriptManager:
                 {
                     "type": "error",
                     "scriptId": script_id,
-                    "message": f"{exc.__class__.__name__}: {exc}",
+                    "message": message,
                 }
             )
             self._emit_state(script_id, "error")
         finally:
-            if mouse_precision is not None:
-                try:
-                    mouse_precision.restore()
-                except Exception as exc:
-                    self._events.put(
-                        {
-                            "type": "error",
-                            "scriptId": script_id,
-                            "message": f"恢复鼠标指针精度失败：{exc}",
-                        }
-                    )
+            self._restore_mouse_precision(script_id, mouse_precision)
+            with self._lock:
+                if self._mouse_precision is mouse_precision:
+                    self._mouse_precision = None
             if logger is not None:
                 close_logger_handlers(logger)
 
@@ -278,3 +303,46 @@ class ScriptManager:
             return self._definitions_by_id[script_id]
         except KeyError as exc:
             raise ValueError(f"未知脚本：{script_id}") from exc
+
+    def _disable_mouse_precision(
+        self,
+        script_id: str,
+        mouse_precision: MousePointerPrecisionManager | None,
+    ) -> None:
+        if mouse_precision is None:
+            return
+        try:
+            mouse_precision.disable_temporarily()
+        except Exception as exc:
+            self._events.put(
+                {
+                    "type": "error",
+                    "scriptId": script_id,
+                    "message": f"关闭“提高指针精确度”失败：{exc}",
+                }
+            )
+            raise
+
+    def _restore_mouse_precision(
+        self,
+        script_id: str,
+        mouse_precision: MousePointerPrecisionManager | None,
+    ) -> None:
+        if mouse_precision is None:
+            return
+        try:
+            mouse_precision.restore()
+        except Exception as exc:
+            self._events.put(
+                {
+                    "type": "error",
+                    "scriptId": script_id,
+                    "message": f"恢复“提高指针精确度”失败：{exc}",
+                }
+            )
+
+
+def _format_exception_message(exc: Exception) -> str:
+    if isinstance(exc, YjsDeviceNotFoundError):
+        return str(exc)
+    return f"{exc.__class__.__name__}: {exc}"

@@ -1,0 +1,4 @@
+interface:
+  display_name: "MXDScript Pointer Precision"
+  short_description: "Handle Windows pointer precision for YiJianShu scripts."
+  default_prompt: "Use this skill when modifying MXDScript scripts that control YiJianShu mouse movement and need Windows pointer precision handled safely."

@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=70", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mhscript-yjs"
+version = "0.1.0"
+description = "Python migration scaffold for MHScript KM scripts using YiJianShu hardware input."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "mss>=10.0.0",
+    "numpy>=2.0.0",
+    "opencv-python>=4.10.0",
+    "pydantic>=2.8.0",
+    "rich>=13.7.0",
+    "typer>=0.12.0",
+    "pywin32>=306; platform_system == 'Windows'",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.2.0",
+    "ruff>=0.5.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

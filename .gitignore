@@ -1,0 +1,30 @@
+.venv/
+__pycache__/
+*.py[cod]
+*.pyd
+*.pyo
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Runtime output
+logs/*
+!logs/.gitkeep
+work/
+outputs/
+screenshots/
+captures/
+
+# Local configuration and binary vendor files
+.env
+config/local.toml
+vendor/**/*.dll
+vendor/**/*.lib
+vendor/**/*.h
+!vendor/msdk/.gitkeep
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

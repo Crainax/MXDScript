@@ -1,0 +1,46 @@
+[app]
+name = "mhscript-yjs"
+log_level = "DEBUG"
+log_dir = "logs"
+
+[maple_story]
+window_title = "MapleStory"
+image_root = "E:\\MHImg"
+
+[yjs]
+# 当前机器检测到的是 64-bit Python，实际运行时应使用 64-bit msdk.dll。
+dll_path = "vendor\\msdk\\msdk.dll"
+device_type = "single_head"
+# 单头且只插一个盒子时，先用端口 1 打开最简单；后续用 device probe 再读取/确认 VID/PID。
+open_mode = "port"
+port = 1
+vid = "0xC216"
+pid = "0x0301"
+screen_width = 1920
+screen_height = 1080
+absolute_move = true
+
+[timing]
+post_move_delay_ms = 90
+confirm_delay_min_ms = 240
+confirm_delay_max_ms = 330
+poll_interval_ms = 300
+
+[scripts.open_package]
+enabled = false
+source_km = "D:\\Project\\MHScript\\Tool\\开包.km"
+no_find_limit = 1800
+click_offset_x = 10
+confirm_images = [
+    "UI\\Yes.bmp",
+    "UI\\OK.bmp",
+    "UI\\OK2.bmp",
+]
+jing_images = [
+    "Event\\202602\\Jing1.bmp",
+    "Event\\202602\\Jing1_2.bmp",
+]
+shi_images = [
+    "Event\\202602\\Shi1.bmp",
+    "Event\\202602\\Shi2.bmp",
+]

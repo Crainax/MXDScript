@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mhscript-yjs"
-version = "0.1.0"
+version = "1.0.0"
 description = "Python migration scaffold for MHScript KM scripts using YiJianShu hardware input."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -13,6 +13,7 @@ dependencies = [
     "numpy>=2.0.0",
     "opencv-python>=4.10.0",
     "pydantic>=2.8.0",
+    "pywebview>=5.3",
     "rich>=13.7.0",
     "typer>=0.12.0",
     "pywin32>=306; platform_system == 'Windows'",
@@ -29,6 +30,7 @@ build = [
 
 [project.scripts]
 mhscript-yjs = "mhscript_yjs.cli:main"
+mhscript-yjs-gui = "mhscript_yjs.gui.web_app:main"
 mhscript-yjs-open-package-gui = "mhscript_yjs.gui.open_package_gui:main"
 
 [tool.setuptools.packages.find]

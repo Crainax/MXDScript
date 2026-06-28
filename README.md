@@ -1,5 +1,46 @@
 # MHScript Python Migration
 
+## MXD脚本库 GUI
+
+新 GUI 入口为 `MXD脚本库`，使用 pywebview 承载 Vite + React 前端：
+
+```powershell
+cd D:\Project\MXDScript
+.\.venv\Scripts\python -m pip install -e .
+cd .\gui_web
+npm install
+npm run build
+cd ..
+.\.venv\Scripts\python -m mhscript_yjs.gui.web_app
+```
+
+开发时也可以先启动 Vite：
+
+```powershell
+cd D:\Project\MXDScript\gui_web
+npm run dev
+```
+
+再启动 Python 壳：
+
+```powershell
+cd D:\Project\MXDScript
+.\.venv\Scripts\python -m mhscript_yjs.gui.web_app --dev-url http://127.0.0.1:1420
+```
+
+打包命令：
+
+```powershell
+cd D:\Project\MXDScript
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build_gui.ps1
+```
+
+日志默认写入：
+
+```text
+%LOCALAPPDATA%\MXDScriptLibrary\logs
+```
+
 这是把旧的魔盒 KM 脚本逐步迁移到 Python + 易键鼠的实验项目。
 
 项目目标位置：`D:\Project\MXDScript`。

@@ -1,0 +1,128 @@
+from __future__ import annotations
+
+import logging
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
+from typing import Any
+
+from mhscript_yjs.core.config import ProjectConfig
+from mhscript_yjs.runtime.control import RunControl
+from mhscript_yjs.runtime.timing import NullSleeper, Sleeper
+from mhscript_yjs.scripts.placeholders import run_placeholder_script
+from mhscript_yjs.scripts.tool.open_package import create_runner
+
+
+@dataclass(frozen=True)
+class ScriptRunContext:
+    config: ProjectConfig
+    logger: logging.Logger
+    control: RunControl
+    dry_run: bool
+    skip_delays: bool
+
+
+@dataclass(frozen=True)
+class ScriptRunResult:
+    exit_reason: str
+    iterations: int = 0
+    details: Mapping[str, Any] = field(default_factory=dict)
+
+
+ScriptRunner = Callable[[ScriptRunContext], ScriptRunResult]
+
+
+@dataclass(frozen=True)
+class ScriptDefinition:
+    id: str
+    name: str
+    category: str
+    description: str
+    module: str
+    default_shortcut: str
+    runner: ScriptRunner
+    placeholder: bool = False
+    requires_mouse_precision: bool = True
+
+
+def get_script_definitions() -> tuple[ScriptDefinition, ...]:
+    return (
+        ScriptDefinition(
+            id="open_package",
+            name="自动开包",
+            category="工具",
+            description="自动识别确认、精、石图片并执行点击/回车流程。",
+            module="mhscript_yjs.scripts.tool.open_package",
+            default_shortcut="F10",
+            runner=_run_open_package,
+            placeholder=False,
+            requires_mouse_precision=True,
+        ),
+        _placeholder(
+            script_id="event_placeholder",
+            name="活动脚本占位",
+            category="活动",
+            default_shortcut="F8",
+        ),
+        _placeholder(
+            script_id="character_placeholder",
+            name="角色循环占位",
+            category="角色",
+            default_shortcut="F9",
+        ),
+        _placeholder(
+            script_id="system_placeholder",
+            name="系统辅助占位",
+            category="系统",
+            default_shortcut="Ctrl+F12",
+        ),
+    )
+
+
+def _run_open_package(context: ScriptRunContext) -> ScriptRunResult:
+    context.logger.info("自动开包脚本准备启动。")
+    runner = create_runner(
+        config=context.config,
+        dry_run=context.dry_run,
+        skip_delays=context.skip_delays,
+        logger=context.logger,
+        control=context.control,
+    )
+    result = runner.run()
+    return ScriptRunResult(
+        exit_reason=result.exit_reason,
+        iterations=result.iterations,
+        details={"no_find_count": result.no_find_count},
+    )
+
+
+def _placeholder(
+    *,
+    script_id: str,
+    name: str,
+    category: str,
+    default_shortcut: str,
+) -> ScriptDefinition:
+    def runner(context: ScriptRunContext) -> ScriptRunResult:
+        sleeper = (
+            NullSleeper(logger=context.logger, control=context.control)
+            if context.skip_delays
+            else Sleeper(logger=context.logger, control=context.control)
+        )
+        result = run_placeholder_script(
+            display_name=name,
+            control=context.control,
+            sleeper=sleeper,
+        )
+        return ScriptRunResult(exit_reason=result.exit_reason, iterations=result.iterations)
+
+    return ScriptDefinition(
+        id=script_id,
+        name=name,
+        category=category,
+        description="占位脚本，用于保留脚本库位置，后续可替换为真实 Python 脚本。",
+        module="mhscript_yjs.scripts.placeholders",
+        default_shortcut=default_shortcut,
+        runner=runner,
+        placeholder=True,
+        requires_mouse_precision=False,
+    )

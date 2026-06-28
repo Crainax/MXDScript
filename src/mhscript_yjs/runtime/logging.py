@@ -17,9 +17,9 @@ def setup_script_logger(
     logger = logging.getLogger(f"mhscript_yjs.{script_name}")
     logger.setLevel(_level(level))
     logger.propagate = False
-    logger.handlers.clear()
+    close_logger_handlers(logger)
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     log_path = log_dir / f"{script_name}_{timestamp}.log"
     formatter = logging.Formatter(
         fmt="%(asctime)s.%(msecs)03d %(levelname)-8s %(name)s - %(message)s",
@@ -44,6 +44,19 @@ def setup_script_logger(
 
     logger.info("log_file=%s", log_path)
     return logger
+
+
+def close_logger_handlers(logger: logging.Logger) -> None:
+    for handler in list(logger.handlers):
+        logger.removeHandler(handler)
+        handler.close()
+
+
+def logger_file_path(logger: logging.Logger) -> Path | None:
+    for handler in logger.handlers:
+        if isinstance(handler, RotatingFileHandler):
+            return Path(handler.baseFilename)
+    return None
 
 
 def _level(value: str) -> int:

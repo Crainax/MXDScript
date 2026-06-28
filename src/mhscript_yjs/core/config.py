@@ -68,6 +68,19 @@ class ProjectConfig:
 
 
 def project_root() -> Path:
+    return resource_root()
+
+
+def resource_root() -> Path:
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        return Path(meipass).resolve()
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parents[3]
+
+
+def external_root() -> Path:
     if getattr(sys, "frozen", False):
         return Path(sys.executable).resolve().parent
     return Path(__file__).resolve().parents[3]
@@ -82,9 +95,10 @@ def load_config(config_path: Path | str | None = None, *, load_local: bool = Tru
     data = _read_toml(base_path)
 
     if load_local:
-        local_path = base_path.parent / "local.toml"
-        if local_path.exists():
-            data = _deep_merge(data, _read_toml(local_path))
+        for local_path in _local_config_candidates(base_path):
+            if local_path.exists():
+                data = _deep_merge(data, _read_toml(local_path))
+                break
 
     return _to_project_config(data, root)
 
@@ -102,6 +116,14 @@ def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any
         else:
             result[key] = copy.deepcopy(value)
     return result
+
+
+def _local_config_candidates(base_path: Path) -> tuple[Path, ...]:
+    external_path = external_root() / "config" / "local.toml"
+    bundled_path = base_path.parent / "local.toml"
+    if external_path == bundled_path:
+        return (bundled_path,)
+    return (external_path, bundled_path)
 
 
 def _to_project_config(data: dict[str, Any], root: Path) -> ProjectConfig:

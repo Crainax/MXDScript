@@ -506,6 +506,10 @@ button:disabled {
   color: var(--warning);
 }
 
+.level-important {
+  color: var(--primary);
+}
+
 .empty-log {
   padding: 12px;
 }

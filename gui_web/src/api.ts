@@ -65,6 +65,17 @@ export async function saveShortcuts(shortcuts: Record<string, string>): Promise<
   return response.settings;
 }
 
+export async function saveRunOptions(options: { dryRun: boolean; skipDelays: boolean }): Promise<AppSettings> {
+  const response = await requestJson("/settings", {
+    method: "POST",
+    body: JSON.stringify(options),
+  });
+  if (!response.ok || !response.settings) {
+    throw new Error(response.error ?? "保存运行选项失败");
+  }
+  return response.settings;
+}
+
 export async function openLogDir(): Promise<void> {
   const response = await requestJson("/open-log-dir", { method: "POST" });
   if (!response.ok) {

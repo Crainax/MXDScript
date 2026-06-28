@@ -41,6 +41,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build_gui.ps1
 %LOCALAPPDATA%\MXDScriptLibrary\logs
 ```
 
+最终 GUI exe 会请求管理员权限启动，以便游戏也以管理员权限运行时全局快捷键仍能触发。打包时会把 `assets/`、`config/default.toml` 和 `vendor/msdk/msdk.dll` 一起带入 exe；首次运行会在 exe 同目录创建 `assets/`、`config/`、`vendor/msdk/`，已有文件不会覆盖。
+
 这是把旧的魔盒 KM 脚本逐步迁移到 Python + 易键鼠的实验项目。
 
 项目目标位置：`D:\Project\MXDScript`。
@@ -150,3 +152,7 @@ python -m mhscript_yjs.scripts.tool.open_package --live
 - `scripts.tool.open_package`: 对应 `Tool/开包.km` 的状态机迁移。
 
 更多细节见 `docs/architecture.md`、`docs/legacy_open_package.md` 和 `docs/questions_for_user.md`。
+
+## 图片格式策略
+
+当前开包模板保留旧 KM 使用的 BMP，因为它们是原始像素资源，最适合先验证可行性。匹配器也支持 PNG，包含 alpha 通道的 PNG 会使用 alpha 作为透明遮罩；没有 alpha 的 BMP/PNG 继续使用旧魔盒“四角同色即透明”的规则。后续如果需要编辑或压缩资源，可以无损转 PNG 后再调整配置路径。

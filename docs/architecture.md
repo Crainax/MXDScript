@@ -42,6 +42,8 @@ src/mhscript_yjs/
 logs/open_package_YYYYMMDD_HHMMSS.log
 ```
 
+文件日志记录 DEBUG 及以上的完整诊断信息；GUI 实时日志只显示 `IMPORTANT` 及以上的关键中文事件，例如“将卡牌转成精华”“开包获取10张卡牌”和结束统计，避免循环找图日志刷屏。
+
 建议记录字段：
 
 - 启动参数：配置文件、Python 位数、DLL 路径、窗口标题、图片根目录
@@ -54,6 +56,8 @@ logs/open_package_YYYYMMDD_HHMMSS.log
 ## 配置策略
 
 提交 `config/default.toml` 作为项目默认值；本机私有路径、DLL 路径、VID/PID、分辨率放到 `config/local.toml`，该文件已被 `.gitignore` 忽略。
+
+打包版首次运行会在 exe 同目录落地 `assets/`、`config/`、`vendor/msdk/`。相对 `image_root = "assets"` 会优先按 exe 同目录解释，因此另一台电脑只拿到 exe 也能得到同一套模板、默认配置和易键鼠 DLL。当前模板保留 BMP；匹配器已经支持 PNG alpha 遮罩，后续可以在确认无像素差异后再迁移格式。
 
 ## 测试策略
 

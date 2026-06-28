@@ -29,6 +29,7 @@ import {
   pauseScript,
   pollEvents,
   resumeScript,
+  saveRunOptions,
   saveShortcuts,
   startScript,
   stopScript,
@@ -56,6 +57,7 @@ export function App() {
   const [themePreference, setThemePreference] = useState<ThemePreference>("system");
   const [dryRun, setDryRun] = useState(false);
   const [skipDelays, setSkipDelays] = useState(false);
+  const [optionsLoaded, setOptionsLoaded] = useState(false);
   const lastEscAt = useRef(0);
   const logId = useRef(1);
 
@@ -68,6 +70,7 @@ export function App() {
         setThemePreference(storedTheme);
         setDryRun(readStoredBoolean("mxdscript.dryRun", state.settings.dryRun));
         setSkipDelays(readStoredBoolean("mxdscript.skipDelays", state.settings.skipDelays));
+        setOptionsLoaded(true);
       })
       .catch((error: unknown) => {
         setMessage(error instanceof Error ? error.message : "启动 GUI 失败");
@@ -82,12 +85,19 @@ export function App() {
   }, [resolvedTheme, themePreference]);
 
   useEffect(() => {
+    if (!optionsLoaded) {
+      return;
+    }
     localStorage.setItem("mxdscript.dryRun", String(dryRun));
-  }, [dryRun]);
-
-  useEffect(() => {
     localStorage.setItem("mxdscript.skipDelays", String(skipDelays));
-  }, [skipDelays]);
+    void saveRunOptions({ dryRun, skipDelays })
+      .then((nextSettings) => {
+        setAppState((current) => (current ? { ...current, settings: nextSettings } : current));
+      })
+      .catch((error: unknown) => {
+        setMessage(error instanceof Error ? error.message : "保存运行选项失败");
+      });
+  }, [dryRun, optionsLoaded, skipDelays]);
 
   const runtime = appState?.runtime;
   const settings = appState?.settings;
@@ -235,17 +245,6 @@ export function App() {
       if (isTypingTarget(event.target)) {
         return;
       }
-
-      const shortcut = shortcutFromKeyboardEvent(event);
-      if (!shortcut) {
-        return;
-      }
-      const scriptId = Object.entries(settings.shortcuts).find(([, value]) => value === shortcut)?.[0];
-      if (!scriptId || runtime.activeScriptId) {
-        return;
-      }
-      event.preventDefault();
-      void runStart(scriptId);
     };
 
     window.addEventListener("keydown", handleKeyDown);
@@ -512,6 +511,16 @@ function LogPanel(props: {
   onOpenCurrentLog: () => void;
   onClear: () => void;
 }) {
+  const logStreamRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const logStream = logStreamRef.current;
+    if (!logStream) {
+      return;
+    }
+    logStream.scrollTop = logStream.scrollHeight;
+  }, [props.logs.length]);
+
   return (
     <section className="log-panel">
       <div className="panel-header">
@@ -532,7 +541,7 @@ function LogPanel(props: {
         </div>
       </div>
       <div className="log-path">{props.selectedScript?.logPath ?? props.logDir}</div>
-      <div className="log-stream">
+      <div className="log-stream" ref={logStreamRef}>
         {props.logs.length === 0 ? (
           <div className="empty-log">等待脚本输出...</div>
         ) : (

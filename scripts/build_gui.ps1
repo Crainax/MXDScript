@@ -75,6 +75,7 @@ $PyInstallerArgs = @(
     "--collect-submodules", "webview",
     "--add-data", "$(Join-Path $GuiWebDir "dist");gui_web\dist",
     "--add-data", "$(Join-Path $ProjectRoot "config\default.toml");config",
+    "--add-data", "$(Join-Path $ProjectRoot "assets");assets",
     (Join-Path $ProjectRoot "src\mhscript_yjs\gui\web_app.py")
 )
 

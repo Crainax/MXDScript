@@ -88,9 +88,19 @@ def external_root() -> Path:
 
 def load_config(config_path: Path | str | None = None, *, load_local: bool = True) -> ProjectConfig:
     root = project_root()
-    base_path = Path(config_path) if config_path else root / "config" / "default.toml"
-    if not base_path.is_absolute():
-        base_path = root / base_path
+    if config_path:
+        base_path = Path(config_path)
+        if not base_path.is_absolute():
+            base_path = root / base_path
+    else:
+        external_default = external_root() / "config" / "default.toml"
+        bundled_default = root / "config" / "default.toml"
+        base_path = (
+            external_default
+            if getattr(sys, "frozen", False) and external_default.exists()
+            else bundled_default
+        )
+    config_root = _config_root_for(base_path, root)
 
     data = _read_toml(base_path)
 
@@ -100,7 +110,7 @@ def load_config(config_path: Path | str | None = None, *, load_local: bool = Tru
                 data = _deep_merge(data, _read_toml(local_path))
                 break
 
-    return _to_project_config(data, root)
+    return _to_project_config(data, config_root)
 
 
 def _read_toml(path: Path) -> dict[str, Any]:
@@ -124,6 +134,12 @@ def _local_config_candidates(base_path: Path) -> tuple[Path, ...]:
     if external_path == bundled_path:
         return (bundled_path,)
     return (external_path, bundled_path)
+
+
+def _config_root_for(base_path: Path, fallback: Path) -> Path:
+    if base_path.parent.name.lower() == "config":
+        return base_path.parent.parent
+    return fallback
 
 
 def _to_project_config(data: dict[str, Any], root: Path) -> ProjectConfig:

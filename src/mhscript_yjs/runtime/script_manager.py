@@ -10,8 +10,10 @@ from mhscript_yjs.core.config import load_config
 from mhscript_yjs.runtime.app_paths import logs_dir
 from mhscript_yjs.runtime.control import PauseController
 from mhscript_yjs.runtime.logging import (
+    IMPORTANT_LEVEL,
     close_logger_handlers,
     logger_file_path,
+    log_important,
     setup_script_logger,
 )
 from mhscript_yjs.runtime.mouse_settings import MousePointerPrecisionManager
@@ -23,7 +25,7 @@ Event = dict[str, Any]
 
 class ScriptEventHandler(logging.Handler):
     def __init__(self, events: queue.Queue[Event], script_id: str) -> None:
-        super().__init__(level=logging.INFO)
+        super().__init__(level=IMPORTANT_LEVEL)
         self.events = events
         self.script_id = script_id
 
@@ -66,6 +68,9 @@ class ScriptManager:
                 events.append(self._events.get_nowait())
         except queue.Empty:
             return events
+
+    def emit_error(self, script_id: str, message: str) -> None:
+        self._events.put({"type": "error", "scriptId": script_id, "message": message})
 
     def start(
         self,
@@ -173,7 +178,8 @@ class ScriptManager:
             logger.addHandler(event_handler)
             controller.logger = logger
 
-            logger.info(
+            log_important(
+                logger,
                 "脚本启动：%s，模式=%s，模块=%s。",
                 definition.name,
                 "dry-run" if dry_run else "live",
@@ -197,7 +203,8 @@ class ScriptManager:
                 "iterations": result.iterations,
                 "details": dict(result.details),
             }
-            logger.info(
+            log_important(
+                logger,
                 "脚本结束：%s，原因=%s，循环次数=%s。",
                 definition.name,
                 result.exit_reason,

@@ -9,13 +9,19 @@ from typing import Any
 
 from mhscript_yjs import __version__
 from mhscript_yjs.runtime.app_paths import logs_dir, settings_path
+from mhscript_yjs.runtime.global_hotkeys import GlobalHotkeyService, HotkeyBinding
 from mhscript_yjs.runtime.script_manager import ScriptManager
-from mhscript_yjs.runtime.shortcuts import ShortcutError, normalize_shortcut_map
+from mhscript_yjs.runtime.shortcuts import ShortcutError, normalize_shortcut_map, shortcut_to_win_hotkey
 
 
 class GuiApi:
-    def __init__(self, manager: ScriptManager | None = None) -> None:
+    def __init__(self, manager: ScriptManager | None = None, *, enable_hotkeys: bool = False) -> None:
         self.manager = manager or ScriptManager()
+        self._hotkeys: GlobalHotkeyService | None = (
+            GlobalHotkeyService() if enable_hotkeys else None
+        )
+        if self._hotkeys is not None:
+            self._refresh_hotkeys(self._load_settings())
 
     def get_state(self) -> dict[str, Any]:
         return {
@@ -65,9 +71,17 @@ class GuiApi:
             settings = self._load_settings()
             settings["shortcuts"] = merged
             _write_json(settings_path(), settings)
+            self._refresh_hotkeys(settings)
             return {"ok": True, "settings": settings}
         except ShortcutError as exc:
             return {"ok": False, "error": str(exc)}
+
+    def save_run_options(self, *, dry_run: bool, skip_delays: bool) -> dict[str, Any]:
+        settings = self._load_settings()
+        settings["dryRun"] = bool(dry_run)
+        settings["skipDelays"] = bool(skip_delays)
+        _write_json(settings_path(), settings)
+        return {"ok": True, "settings": settings}
 
     def open_log_dir(self) -> dict[str, Any]:
         return self._call(lambda: _open_path(logs_dir()))
@@ -117,6 +131,65 @@ class GuiApi:
         defaults["dryRun"] = bool(data.get("dryRun", defaults["dryRun"]))
         defaults["skipDelays"] = bool(data.get("skipDelays", defaults["skipDelays"]))
         return defaults
+
+    def _refresh_hotkeys(self, settings: dict[str, Any]) -> None:
+        if self._hotkeys is None:
+            return
+
+        bindings: list[HotkeyBinding] = []
+        shortcuts = settings.get("shortcuts", {})
+        if not isinstance(shortcuts, dict):
+            return
+
+        for definition in self.manager.definitions:
+            shortcut = str(shortcuts.get(definition.id, definition.default_shortcut))
+            try:
+                hotkey = shortcut_to_win_hotkey(shortcut)
+            except ShortcutError:
+                continue
+            bindings.append(
+                HotkeyBinding(
+                    name=definition.name,
+                    shortcut=hotkey.shortcut,
+                    modifiers=hotkey.modifiers,
+                    vk=hotkey.vk,
+                    callback=lambda script_id=definition.id: self._activate_shortcut(script_id),
+                )
+            )
+        self._hotkeys.replace_bindings(bindings)
+
+    def _activate_shortcut(self, script_id: str) -> None:
+        try:
+            settings = self._load_settings()
+            snapshot = self.manager.snapshot()
+            active_script_id = snapshot.get("activeScriptId")
+
+            if active_script_id is None:
+                self.manager.start(
+                    script_id,
+                    dry_run=bool(settings.get("dryRun", False)),
+                    skip_delays=bool(settings.get("skipDelays", False)),
+                )
+                return
+
+            if active_script_id != script_id:
+                return
+
+            script = next(
+                (
+                    item
+                    for item in snapshot.get("scripts", [])
+                    if isinstance(item, dict) and item.get("id") == script_id
+                ),
+                None,
+            )
+            status = script.get("status") if isinstance(script, dict) else None
+            if status == "running":
+                self.manager.pause()
+            elif status == "paused":
+                self.manager.resume()
+        except Exception as exc:
+            self.manager.emit_error(script_id, f"快捷键执行失败：{exc.__class__.__name__}: {exc}")
 
 
 def _write_json(path: Path, data: dict[str, Any]) -> None:

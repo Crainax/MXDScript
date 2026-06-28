@@ -59,6 +59,7 @@ class OpenPackageTests(unittest.TestCase):
 
         self.assertEqual(result.exit_reason, "iteration_limit")
         self.assertEqual(result.no_find_count, 0)
+        self.assertEqual(result.cards_opened, 0)
         self.assertEqual(
             [action.name for action in device.actions],
             ["open", "move_to", "left_click", "press_key", "close"],
@@ -94,6 +95,33 @@ class OpenPackageTests(unittest.TestCase):
             [action.name for action in device.actions],
             ["open", "press_key", "move_to", "left_click", "close"],
         )
+        self.assertEqual(result.cards_opened, 0)
+        self.assertEqual(runner.next_after_confirm, 3)
+
+    def test_shi_branch_counts_ten_opened_cards_after_confirm(self) -> None:
+        config = load_config(load_local=False)
+        matcher = FakeMatcher(
+            {
+                "confirm": [False, True],
+                "jing": [False],
+                "shi": [True],
+            }
+        )
+        device = DryRunDevice()
+        runner = OpenPackageRunner(
+            config=config,
+            device=device,
+            matcher=matcher,  # type: ignore[arg-type]
+            sleeper=NullSleeper(),
+            logger=logging.getLogger("test.open_package"),
+            window_info=_window(),
+        )
+
+        result = runner.run(max_iterations=1)
+
+        self.assertEqual(result.exit_reason, "iteration_limit")
+        self.assertEqual(result.no_find_count, 0)
+        self.assertEqual(result.cards_opened, 10)
         self.assertEqual(runner.next_after_confirm, 3)
 
     def test_no_match_exits_on_no_find_limit(self) -> None:
@@ -113,6 +141,7 @@ class OpenPackageTests(unittest.TestCase):
 
         self.assertEqual(result.exit_reason, "iteration_limit")
         self.assertEqual(result.no_find_count, 3)
+        self.assertEqual(result.cards_opened, 0)
         self.assertEqual(matcher.calls, ["confirm", "jing", "shi"] * 3)
 
 

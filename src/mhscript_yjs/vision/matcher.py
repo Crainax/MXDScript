@@ -88,18 +88,28 @@ class TemplateMatcher:
 
         # cv2.imread cannot reliably open Unicode/reparse-point paths on Windows.
         # Reading bytes through Python first keeps paths such as OneDrive Chinese folders working.
-        template = cv2.imdecode(np.fromfile(image_path, dtype=np.uint8), cv2.IMREAD_COLOR)
-        if template is None:
+        raw_template = cv2.imdecode(np.fromfile(image_path, dtype=np.uint8), cv2.IMREAD_UNCHANGED)
+        if raw_template is None:
             raise TemplateNotFoundError(f"Template image could not be read: {image_path}")
 
         mask = None
+        if raw_template.ndim == 2:
+            template = cv2.cvtColor(raw_template, cv2.COLOR_GRAY2BGR)
+        elif raw_template.shape[2] == 4:
+            template = raw_template[:, :, :3]
+            alpha = raw_template[:, :, 3]
+            if np.any(alpha < 255):
+                mask = (alpha > 0).astype(np.uint8) * 255
+        else:
+            template = raw_template[:, :, :3]
+
         corners = (
             template[0, 0],
             template[0, -1],
             template[-1, 0],
             template[-1, -1],
         )
-        if all(np.array_equal(corners[0], corner) for corner in corners[1:]):
+        if mask is None and all(np.array_equal(corners[0], corner) for corner in corners[1:]):
             transparent = corners[0]
             mask = np.any(template != transparent, axis=2).astype(np.uint8) * 255
             if not np.any(mask):

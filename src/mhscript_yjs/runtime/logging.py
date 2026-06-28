@@ -6,6 +6,10 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 
+IMPORTANT_LEVEL = 25
+logging.addLevelName(IMPORTANT_LEVEL, "IMPORTANT")
+
+
 def setup_script_logger(
     *,
     script_name: str,
@@ -15,7 +19,7 @@ def setup_script_logger(
 ) -> logging.Logger:
     log_dir.mkdir(parents=True, exist_ok=True)
     logger = logging.getLogger(f"mhscript_yjs.{script_name}")
-    logger.setLevel(_level(level))
+    logger.setLevel(logging.DEBUG)
     logger.propagate = False
     close_logger_handlers(logger)
 
@@ -33,7 +37,7 @@ def setup_script_logger(
         encoding="utf-8",
     )
     file_handler.setFormatter(formatter)
-    file_handler.setLevel(_level(level))
+    file_handler.setLevel(logging.DEBUG)
     logger.addHandler(file_handler)
 
     if console:
@@ -44,6 +48,10 @@ def setup_script_logger(
 
     logger.info("log_file=%s", log_path)
     return logger
+
+
+def log_important(logger: logging.Logger, message: str, *args: object, **kwargs: object) -> None:
+    logger.log(IMPORTANT_LEVEL, message, *args, **kwargs)
 
 
 def close_logger_handlers(logger: logging.Logger) -> None:

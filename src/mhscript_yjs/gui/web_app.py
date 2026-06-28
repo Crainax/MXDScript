@@ -8,9 +8,16 @@ from pathlib import Path
 from mhscript_yjs.core.config import project_root
 from mhscript_yjs.gui.api import GuiApi
 from mhscript_yjs.gui.http_server import GuiHttpServer, add_api_query
+from mhscript_yjs.runtime.elevation import ensure_admin_or_relaunch
+from mhscript_yjs.runtime.resources import prepare_runtime_resources
 
 
 def main(argv: list[str] | None = None) -> int:
+    if ensure_admin_or_relaunch(argv):
+        return 0
+
+    prepare_runtime_resources()
+
     parser = argparse.ArgumentParser(description="Run the MXD script library GUI.")
     parser.add_argument(
         "--dev-url",
@@ -24,7 +31,7 @@ def main(argv: list[str] | None = None) -> int:
     except ModuleNotFoundError as exc:
         raise RuntimeError("缺少 pywebview，请先安装项目依赖：python -m pip install -e .") from exc
 
-    http_server = GuiHttpServer(static_root=_frontend_dist_dir(), api=GuiApi())
+    http_server = GuiHttpServer(static_root=_frontend_dist_dir(), api=GuiApi(enable_hotkeys=True))
     http_server.start()
     url = add_api_query(args.dev_url, http_server.api_url) if args.dev_url else http_server.url
     webview.create_window(

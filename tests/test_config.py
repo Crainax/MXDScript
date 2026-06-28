@@ -11,6 +11,7 @@ class ConfigTests(unittest.TestCase):
 
         self.assertEqual(config.app.log_level, "INFO")
         self.assertEqual(config.maple_story.window_title, "MapleStory")
+        self.assertEqual(config.maple_story.image_root.name, "assets")
         self.assertEqual(config.yjs.port, 1)
         self.assertEqual(config.yjs.vid, 0xC216)
         self.assertEqual(config.yjs.pid, 0x0301)

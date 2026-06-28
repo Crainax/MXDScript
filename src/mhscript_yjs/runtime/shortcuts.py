@@ -15,6 +15,13 @@ class ShortcutConflict:
     second_script_id: str
 
 
+@dataclass(frozen=True)
+class WinHotkey:
+    shortcut: str
+    modifiers: int
+    vk: int
+
+
 MODIFIER_ORDER = ("Ctrl", "Alt", "Shift")
 MODIFIER_ALIASES = {
     "CTRL": "Ctrl",
@@ -22,6 +29,12 @@ MODIFIER_ALIASES = {
     "ALT": "Alt",
     "SHIFT": "Shift",
 }
+WIN32_MODIFIERS = {
+    "Alt": 0x0001,
+    "Ctrl": 0x0002,
+    "Shift": 0x0004,
+}
+WIN32_MOD_NOREPEAT = 0x4000
 
 
 def normalize_shortcut(value: str) -> str:
@@ -74,6 +87,16 @@ def normalize_shortcut_map(script_ids: Iterable[str], shortcuts: dict[str, str])
     return normalized
 
 
+def shortcut_to_win_hotkey(value: str) -> WinHotkey:
+    normalized = normalize_shortcut(value)
+    parts = normalized.split("+")
+    key = parts[-1]
+    modifiers = WIN32_MOD_NOREPEAT
+    for modifier in parts[:-1]:
+        modifiers |= WIN32_MODIFIERS[modifier]
+    return WinHotkey(shortcut=normalized, modifiers=modifiers, vk=_win_vk(key))
+
+
 def _normalize_key(value: str) -> str:
     upper = value.upper()
     if upper in {"ESC", "ESCAPE"}:
@@ -89,3 +112,11 @@ def _normalize_key(value: str) -> str:
 
 def _is_function_key(value: str) -> bool:
     return value.startswith("F") and value[1:].isdigit() and 1 <= int(value[1:]) <= 12
+
+
+def _win_vk(value: str) -> int:
+    if _is_function_key(value):
+        return 0x70 + int(value[1:]) - 1
+    if len(value) == 1 and value.isalnum():
+        return ord(value.upper())
+    raise ShortcutError(f"不支持注册为 Windows 全局热键：{value}")

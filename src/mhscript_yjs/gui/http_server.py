@@ -93,6 +93,14 @@ class GuiHttpServer:
                         )
                     )
                     return
+                if parsed.path == "/api/settings":
+                    self._send_json(
+                        api.save_run_options(
+                            dry_run=bool(body.get("dryRun", False)),
+                            skip_delays=bool(body.get("skipDelays", False)),
+                        )
+                    )
+                    return
                 if parsed.path == "/api/open-log-dir":
                     self._send_json(api.open_log_dir())
                     return

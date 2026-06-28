@@ -26,6 +26,16 @@ class GuiApiTests(unittest.TestCase):
         self.assertFalse(response["ok"])
         self.assertIn("Esc", response["error"])
 
+    def test_save_run_options_persists_hotkey_runtime_mode(self) -> None:
+        with _temporary_local_appdata():
+            api = GuiApi()
+            response = api.save_run_options(dry_run=True, skip_delays=True)
+            state = api.get_state()
+
+        self.assertTrue(response["ok"])
+        self.assertTrue(state["settings"]["dryRun"])
+        self.assertTrue(state["settings"]["skipDelays"])
+
     def test_placeholder_script_emits_log_events(self) -> None:
         with _temporary_local_appdata():
             api = GuiApi()

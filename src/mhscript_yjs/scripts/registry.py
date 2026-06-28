@@ -91,7 +91,10 @@ def _run_open_package(context: ScriptRunContext) -> ScriptRunResult:
     return ScriptRunResult(
         exit_reason=result.exit_reason,
         iterations=result.iterations,
-        details={"no_find_count": result.no_find_count},
+        details={
+            "no_find_count": result.no_find_count,
+            "cards_opened": result.cards_opened,
+        },
     )
 
 

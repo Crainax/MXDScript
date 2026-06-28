@@ -11,7 +11,7 @@ from mhscript_yjs.drivers.dry_run import DryRunDevice
 from mhscript_yjs.drivers.keycodes import VK_ENTER
 from mhscript_yjs.drivers.yjs import YjsDevice
 from mhscript_yjs.runtime.control import NullRunControl, RunControl, StopRequested
-from mhscript_yjs.runtime.logging import setup_script_logger
+from mhscript_yjs.runtime.logging import log_important, setup_script_logger
 from mhscript_yjs.runtime.timing import NullSleeper, Sleeper
 from mhscript_yjs.vision.matcher import TemplateMatcher
 from mhscript_yjs.vision.screenshot import MssScreenCapture
@@ -31,6 +31,7 @@ class OpenPackageResult:
     exit_reason: str
     iterations: int
     no_find_count: int
+    cards_opened: int
 
 
 class OpenPackageRunner:
@@ -55,6 +56,7 @@ class OpenPackageRunner:
         self.groups = build_groups(config)
         self.next_after_confirm = 2
         self.no_find_count = 0
+        self.cards_opened = 0
 
     def run(self, *, max_iterations: int | None = None) -> OpenPackageResult:
         window = self.window_info or find_window(self.config.maple_story.window_title)
@@ -87,7 +89,7 @@ class OpenPackageRunner:
                     return self._result("iteration_limit", iterations)
                 iterations += 1
 
-                self.logger.info(
+                self.logger.debug(
                     "自动开包第 %s 次循环：连续未识别 %s 次，确认后目标=%s。",
                     iterations,
                     self.no_find_count,
@@ -113,7 +115,7 @@ class OpenPackageRunner:
                             self._handle_shi(shi, region)
                         else:
                             self.no_find_count += 1
-                            self.logger.info(
+                            self.logger.debug(
                                 "第 %s 次循环未识别到目标，连续未识别 %s 次。",
                                 iterations,
                                 self.no_find_count,
@@ -138,14 +140,14 @@ class OpenPackageRunner:
 
     def _handle_confirm(self, match: MatchResult, region: Region) -> None:
         self._checkpoint()
-        self.logger.info(
+        self.logger.debug(
             "发现确认按钮：图片=%s，坐标=(%s,%s)，相似度=%.6f。",
             match.image_path,
             match.x,
             match.y,
             match.score,
         )
-        self.logger.info(
+        self.logger.debug(
             "stage=confirm image=%s x=%s y=%s score=%.6f next_after_confirm=%s",
             match.image_path,
             match.x,
@@ -155,12 +157,13 @@ class OpenPackageRunner:
         )
         self._checkpoint()
         self.device.press_key(VK_ENTER, 1)
-        self.logger.info("已按下 Enter 确认。")
+        self.logger.debug("已按下 Enter 确认。")
         self.sleeper.delay_random_ms(
             self.config.timing.confirm_delay_min_ms,
             self.config.timing.confirm_delay_max_ms,
         )
         self.no_find_count = 0
+        self._record_confirmed_action(self.next_after_confirm)
 
         expected = self.groups.shi if self.next_after_confirm == 2 else self.groups.jing
         matched = self._wait_for_group(expected, region)
@@ -168,22 +171,22 @@ class OpenPackageRunner:
             self._click_match(matched)
             self.no_find_count = 0
             self.next_after_confirm = 3 if self.next_after_confirm == 2 else 2
-            self.logger.info(
+            self.logger.debug(
                 "确认后的目标已切换：下次确认后优先处理%s。",
                 "石" if self.next_after_confirm == 2 else "精",
             )
-            self.logger.info(
+            self.logger.debug(
                 "stage_after_confirm_switched next_after_confirm=%s",
                 self.next_after_confirm,
             )
         else:
             self.no_find_count += 1
-            self.logger.info(
+            self.logger.debug(
                 "确认后的目标未找到：期望=%s，连续未识别 %s 次。",
                 expected.name,
                 self.no_find_count,
             )
-            self.logger.info(
+            self.logger.debug(
                 "confirm_followup_not_found expected=%s no_find_count=%s",
                 expected.name,
                 self.no_find_count,
@@ -191,14 +194,14 @@ class OpenPackageRunner:
 
     def _handle_jing(self, match: MatchResult, region: Region) -> None:
         self._checkpoint()
-        self.logger.info(
+        self.logger.debug(
             "发现“精”目标：图片=%s，坐标=(%s,%s)，相似度=%.6f。",
             match.image_path,
             match.x,
             match.y,
             match.score,
         )
-        self.logger.info(
+        self.logger.debug(
             "stage=jing image=%s x=%s y=%s score=%.6f",
             match.image_path,
             match.x,
@@ -208,23 +211,23 @@ class OpenPackageRunner:
         self._click_match(match)
         self.no_find_count = 0
         self.next_after_confirm = 2
-        if self._wait_for_confirm(region):
+        if self._wait_for_confirm(region, confirmed_action=self.next_after_confirm):
             self.no_find_count = 0
         else:
             self.no_find_count += 1
-            self.logger.info("点击“精”后未找到确认按钮，连续未识别 %s 次。", self.no_find_count)
-            self.logger.info("jing_followup_confirm_not_found no_find_count=%s", self.no_find_count)
+            self.logger.debug("点击“精”后未找到确认按钮，连续未识别 %s 次。", self.no_find_count)
+            self.logger.debug("jing_followup_confirm_not_found no_find_count=%s", self.no_find_count)
 
     def _handle_shi(self, match: MatchResult, region: Region) -> None:
         self._checkpoint()
-        self.logger.info(
+        self.logger.debug(
             "发现“石”目标：图片=%s，坐标=(%s,%s)，相似度=%.6f。",
             match.image_path,
             match.x,
             match.y,
             match.score,
         )
-        self.logger.info(
+        self.logger.debug(
             "stage=shi image=%s x=%s y=%s score=%.6f",
             match.image_path,
             match.x,
@@ -234,18 +237,18 @@ class OpenPackageRunner:
         self._click_match(match)
         self.no_find_count = 0
         self.next_after_confirm = 3
-        if self._wait_for_confirm(region):
+        if self._wait_for_confirm(region, confirmed_action=self.next_after_confirm):
             self.no_find_count = 0
         else:
             self.no_find_count += 1
-            self.logger.info("点击“石”后未找到确认按钮，连续未识别 %s 次。", self.no_find_count)
-            self.logger.info("shi_followup_confirm_not_found no_find_count=%s", self.no_find_count)
+            self.logger.debug("点击“石”后未找到确认按钮，连续未识别 %s 次。", self.no_find_count)
+            self.logger.debug("shi_followup_confirm_not_found no_find_count=%s", self.no_find_count)
 
-    def _wait_for_confirm(self, region: Region) -> bool:
+    def _wait_for_confirm(self, region: Region, *, confirmed_action: int) -> bool:
         matched = self._wait_for_group(self.groups.confirm, region)
         if not matched:
             return False
-        self.logger.info(
+        self.logger.debug(
             "followup_confirm image=%s x=%s y=%s score=%.6f",
             matched.image_path,
             matched.x,
@@ -254,12 +257,23 @@ class OpenPackageRunner:
         )
         self._checkpoint()
         self.device.press_key(VK_ENTER, 1)
-        self.logger.info("已按下后续确认 Enter。")
+        self.logger.debug("已按下后续确认 Enter。")
         self.sleeper.delay_random_ms(
             self.config.timing.confirm_delay_min_ms,
             self.config.timing.confirm_delay_max_ms,
         )
+        self._record_confirmed_action(confirmed_action)
         return True
+
+    def _record_confirmed_action(self, confirmed_action: int) -> None:
+        if confirmed_action == 2:
+            log_important(self.logger, "将卡牌转成精华")
+            return
+
+        if confirmed_action == 3:
+            self.cards_opened += 10
+            log_important(self.logger, "开包获取10张卡牌")
+            log_important(self.logger, "当前总共开了 %s 张卡牌", self.cards_opened)
 
     def _wait_for_group(self, group: ImageGroup, region: Region) -> MatchResult | None:
         for attempt in range(1, 11):
@@ -276,7 +290,7 @@ class OpenPackageRunner:
         self._checkpoint()
         x = match.x + self.config.open_package.click_offset_x
         y = match.y
-        self.logger.info(
+        self.logger.debug(
             "准备点击目标：分组=%s，移动到=(%s,%s)，原始坐标=(%s,%s)。",
             match.group,
             x,
@@ -284,7 +298,7 @@ class OpenPackageRunner:
             match.x,
             match.y,
         )
-        self.logger.info(
+        self.logger.debug(
             "click_match group=%s image=%s move_to=(%s,%s) source=(%s,%s) offset_x=%s",
             match.group,
             match.image_path,
@@ -299,7 +313,7 @@ class OpenPackageRunner:
         self.sleeper.delay_ms(self.config.timing.post_move_delay_ms)
         self._checkpoint()
         self.device.left_click(1)
-        self.logger.info("已完成目标点击。")
+        self.logger.debug("已完成目标点击。")
         self.sleeper.delay_random_ms(
             self.config.timing.confirm_delay_min_ms,
             self.config.timing.confirm_delay_max_ms,
@@ -310,12 +324,15 @@ class OpenPackageRunner:
             exit_reason=exit_reason,
             iterations=iterations,
             no_find_count=self.no_find_count,
+            cards_opened=self.cards_opened,
         )
-        self.logger.info(
-            "自动开包结束：原因=%s，循环次数=%s，连续未识别=%s。",
+        log_important(
+            self.logger,
+            "自动开包结束：原因=%s，循环次数=%s，连续未识别=%s，总共开了 %s 张卡牌。",
             result.exit_reason,
             result.iterations,
             result.no_find_count,
+            result.cards_opened,
         )
         self.logger.info("open_package_exit %s", result)
         return result

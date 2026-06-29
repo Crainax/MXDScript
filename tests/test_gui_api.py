@@ -50,15 +50,18 @@ class GuiApiTests(unittest.TestCase):
             state = api.get_state()
             response = api.save_script_options(
                 "daily_script",
-                {"gugu": False, "matchThreshold": 0.94},
+                {"gugu": False, "matchThreshold": 0.94, "aut7": False},
             )
             next_state = GuiApi().get_state()
 
         self.assertTrue(state["settings"]["scriptOptions"]["daily_script"]["dailyQuest"])
         self.assertTrue(state["settings"]["scriptOptions"]["daily_script"]["gugu"])
+        self.assertTrue(state["settings"]["scriptOptions"]["daily_script"]["aut1"])
+        self.assertTrue(state["settings"]["scriptOptions"]["daily_script"]["aut7"])
         self.assertEqual(state["settings"]["scriptOptions"]["daily_script"]["matchThreshold"], 0.95)
         self.assertTrue(response["ok"])
         self.assertFalse(next_state["settings"]["scriptOptions"]["daily_script"]["gugu"])
+        self.assertFalse(next_state["settings"]["scriptOptions"]["daily_script"]["aut7"])
         self.assertTrue(next_state["settings"]["scriptOptions"]["daily_script"]["otherDaily"])
         self.assertEqual(next_state["settings"]["scriptOptions"]["daily_script"]["matchThreshold"], 0.94)
 

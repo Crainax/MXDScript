@@ -35,6 +35,30 @@ class FakeMatcher:
         )
 
 
+@dataclass
+class SequenceMatcher:
+    matches: dict[str, list[bool]]
+    calls: list[str] = field(default_factory=list)
+    thresholds: list[float] = field(default_factory=list)
+
+    def match_any(self, group: ImageGroup, region: Region) -> MatchResult | None:
+        self.calls.append(group.name)
+        self.thresholds.append(group.threshold)
+        sequence = self.matches.setdefault(group.name, [])
+        matched = sequence.pop(0) if sequence else False
+        if not matched:
+            return None
+        return MatchResult(
+            group=group.name,
+            image_path=group.paths[0],
+            x=100,
+            y=200,
+            width=40,
+            height=20,
+            score=1.0,
+        )
+
+
 class DailyScriptTests(unittest.TestCase):
     def test_initializes_job_even_when_all_modules_are_disabled(self) -> None:
         device = DryRunDevice()
@@ -119,6 +143,116 @@ class DailyScriptTests(unittest.TestCase):
                 ("mouse_wheel", (1,)),
             ],
         )
+
+    def test_receive_daily_quest_opens_scheduler_clicks_receive_and_closes(self) -> None:
+        device = DryRunDevice()
+        runner = DailyRunner(
+            config=load_config(load_local=False),
+            device=device,
+            matcher=SequenceMatcher(
+                {
+                    "SchedulerUI": [False, True, True, False],
+                    "ReceiveButton": [True],
+                    "ReceivedMark": [True],
+                }
+            ),  # type: ignore[arg-type]
+            sleeper=NullSleeper(),
+            logger=logging.getLogger("test.daily_script"),
+            window_info=WindowInfo(hwnd=100, title="MapleStory", x=10, y=20, width=800, height=600),
+        )
+        runner._initialize_window()  # noqa: SLF001
+
+        state = runner._receive_daily_quest()  # noqa: SLF001
+
+        self.assertEqual(state, "accepted")
+        self.assertEqual(
+            [action.name for action in device.actions],
+            [
+                "press_key",
+                "move_relative",
+                "move_to",
+                "left_click",
+                "move_to",
+                "press_key",
+                "move_relative",
+            ],
+        )
+        self.assertEqual(device.actions[0].args, (0xDB, 1))
+
+    def test_receive_daily_quest_done_skips_clear_quest(self) -> None:
+        runner = DailyRunner(
+            config=load_config(load_local=False),
+            device=DryRunDevice(),
+            matcher=SequenceMatcher(
+                {
+                    "SchedulerUI": [True, True, False],
+                    "ReceiveButton": [False],
+                    "ReceivedMark": [False],
+                }
+            ),  # type: ignore[arg-type]
+            sleeper=NullSleeper(),
+            logger=logging.getLogger("test.daily_script"),
+            window_info=WindowInfo(hwnd=100, title="MapleStory", x=10, y=20, width=800, height=600),
+        )
+        runner._initialize_window()  # noqa: SLF001
+        calls: list[str] = []
+        original_receive = runner._receive_daily_quest  # noqa: SLF001
+        runner._receive_daily_quest = lambda: (calls.append("receive") or original_receive())  # type: ignore[method-assign]  # noqa: SLF001
+        runner._run_clear_quest = lambda: calls.append("clear")  # type: ignore[method-assign]  # noqa: SLF001
+
+        runner._run_daily_quest()  # noqa: SLF001
+
+        self.assertEqual(calls, ["receive"])
+
+    def test_clear_quest_uses_aut_options_instead_of_file_configuration(self) -> None:
+        options = {f"aut{flag}": False for flag in range(1, 8)}
+        options["aut2"] = True
+        device = DryRunDevice()
+        runner = DailyRunner(
+            config=load_config(load_local=False),
+            device=device,
+            matcher=FakeMatcher(),  # type: ignore[arg-type]
+            sleeper=NullSleeper(),
+            logger=logging.getLogger("test.daily_script"),
+            options=options,
+            window_info=WindowInfo(hwnd=100, title="MapleStory", x=10, y=20, width=800, height=600),
+        )
+        calls: list[tuple[str, int | None]] = []
+        runner.execute_sub = lambda name: calls.append((name, runner.vars.get("mapFlag")))  # type: ignore[method-assign]
+
+        runner._run_clear_quest()  # noqa: SLF001
+
+        self.assertEqual(
+            calls,
+            [
+                ("ClearAUTGeneric", 2),
+                ("CloseScheduler", 2),
+                ("Home", 2),
+            ],
+        )
+        self.assertEqual([action.name for action in device.actions], ["press_key", "press_key"])
+
+    def test_km_compatibility_apis(self) -> None:
+        device = DryRunDevice()
+        runner = DailyRunner(
+            config=load_config(load_local=False),
+            device=device,
+            matcher=FakeMatcher(),  # type: ignore[arg-type]
+            sleeper=NullSleeper(),
+            logger=logging.getLogger("test.daily_script"),
+            options={"aut7": False},
+            window_info=WindowInfo(hwnd=100, title="MapleStory", x=10, y=20, width=800, height=600),
+        )
+
+        runner._execute_statement("GetFileLine standTime,files/AUT7.txt,questPointer+1")  # noqa: SLF001
+        runner._execute_statement("a = GetTimeStamp()")  # noqa: SLF001
+        runner._execute_statement("b = GetLED(1)")  # noqa: SLF001
+        runner._execute_statement("KeyAllup")  # noqa: SLF001
+
+        self.assertEqual(runner.vars["standTime"], 0)
+        self.assertGreater(runner.vars["a"], 0)
+        self.assertEqual(runner.vars["b"], 0)
+        self.assertEqual([action.name for action in device.actions], ["release_all_keys"])
 
 
 if __name__ == "__main__":

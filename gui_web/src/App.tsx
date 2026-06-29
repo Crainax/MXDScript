@@ -1,4 +1,5 @@
 import {
+  Fragment,
   useCallback,
   useEffect,
   useMemo,
@@ -55,6 +56,10 @@ const DAILY_OPTION_ITEMS = [
   { key: "summerDaily", label: "活动签到" },
   { key: "otherDaily", label: "其他每日" },
 ] as const;
+const AUT_OPTION_ITEMS = Array.from({ length: 7 }, (_, index) => ({
+  key: `aut${index + 1}`,
+  label: `AUT${index + 1}`,
+}));
 
 export function App() {
   const [appState, setAppState] = useState<AppState | null>(null);
@@ -553,14 +558,30 @@ function DailyOptionsPanel(props: {
       </div>
       <div className="daily-option-list">
         {DAILY_OPTION_ITEMS.map((item) => (
-          <label className="daily-option" key={item.key}>
-            <input
-              type="checkbox"
-              checked={optionBoolean(props.options[item.key], true)}
-              onChange={(event) => props.onChange(item.key, event.target.checked)}
-            />
-            <span>{item.label}</span>
-          </label>
+          <Fragment key={item.key}>
+            <label className="daily-option">
+              <input
+                type="checkbox"
+                checked={optionBoolean(props.options[item.key], true)}
+                onChange={(event) => props.onChange(item.key, event.target.checked)}
+              />
+              <span>{item.label}</span>
+            </label>
+            {item.key === "dailyQuest" ? (
+              <div className="daily-aut-grid">
+                {AUT_OPTION_ITEMS.map((aut) => (
+                  <label className="daily-aut-option" key={aut.key}>
+                    <input
+                      type="checkbox"
+                      checked={optionBoolean(props.options[aut.key], true)}
+                      onChange={(event) => props.onChange(aut.key, event.target.checked)}
+                    />
+                    <span>{aut.label}</span>
+                  </label>
+                ))}
+              </div>
+            ) : null}
+          </Fragment>
         ))}
       </div>
       <label className="daily-threshold">

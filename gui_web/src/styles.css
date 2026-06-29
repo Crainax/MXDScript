@@ -376,6 +376,29 @@ h2 {
   accent-color: var(--primary-strong);
 }
 
+.daily-aut-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.daily-aut-option {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.045);
+  padding: 8px 9px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.daily-aut-option input {
+  accent-color: var(--primary-strong);
+}
+
 .daily-threshold {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 118px;

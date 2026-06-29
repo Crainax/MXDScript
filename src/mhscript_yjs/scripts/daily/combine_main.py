@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import math
 import re
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -26,11 +27,13 @@ DAILY_SCRIPT_ID = "daily_script"
 DEFAULT_MATCH_THRESHOLD = 0.95
 MIN_MATCH_THRESHOLD = 0.5
 MAX_MATCH_THRESHOLD = 1.0
+AUT_FLAGS = (1, 2, 3, 4, 5, 6, 7)
 DEFAULT_DAILY_OPTIONS = {
     "dailyQuest": True,
     "gugu": True,
     "summerDaily": True,
     "otherDaily": True,
+    **{f"aut{flag}": True for flag in AUT_FLAGS},
     "matchThreshold": DEFAULT_MATCH_THRESHOLD,
 }
 JOB_DETECTION_THRESHOLD = 0.99
@@ -99,7 +102,7 @@ class DailyRunner:
         self._run_module(
             "dailyQuest",
             "日常任务",
-            lambda: (self.execute_sub("ReceiveQuest"), self.execute_sub("ClearQuest")),
+            self._run_daily_quest,
         )
         self._run_module("gugu", "菇菇神社", self._run_gugu)
         self._run_module("summerDaily", "活动签到", lambda: self.execute_sub("SummerDaily"))
@@ -124,6 +127,13 @@ class DailyRunner:
         callback()
         log_important(self.logger, "[Daily] 完成模块：%s", label)
         self.modules[key] = "completed"
+
+    def _run_daily_quest(self) -> None:
+        receive_state = self._receive_daily_quest()
+        if receive_state == "done":
+            log_important(self.logger, "[ReceiveQuest] 今日任务已完成，跳过 ClearQuest")
+            return
+        self._run_clear_quest()
 
     def _initialize_window(self) -> None:
         window = self.window_info or find_window(self.config.maple_story.window_title)
@@ -217,6 +227,12 @@ class DailyRunner:
         lowered = name.lower()
         if lowered == "gugu":
             self._run_gugu()
+            return
+        if lowered == "receivequest":
+            self._receive_daily_quest()
+            return
+        if lowered == "clearquest":
+            self._run_clear_quest()
             return
         if lowered in {"initializejob", "detectjob"}:
             self._initialize_job()
@@ -355,6 +371,9 @@ class DailyRunner:
         if lower.startswith("delay "):
             self.sleeper.delay_ms(int(self._eval_expr(line[6:].strip())))
             return
+        if lower == "keyallup":
+            self.device.release_all_keys()
+            return
         if lower.startswith("keydown "):
             self.device.key_down(keycode(_key_name(line[8:])))
             return
@@ -401,6 +420,9 @@ class DailyRunner:
         if lower.startswith("findpic "):
             self._execute_find_pic(line[8:])
             return
+        if lower.startswith("getfileline "):
+            self._execute_get_file_line(line[12:])
+            return
         assignment = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+)$", line)
         if assignment:
             self.vars[assignment.group(1)] = self._eval_expr(assignment.group(2))
@@ -425,6 +447,36 @@ class DailyRunner:
         threshold = float(self._eval_expr(args[6]))
         return self._find_pic(region, tuple(raw_paths), threshold, args[-2], args[-1])
 
+    def _execute_get_file_line(self, text: str) -> None:
+        args = _split_args(text)
+        if len(args) < 2:
+            raise RuntimeError(f"Invalid GetFileLine statement: {text}")
+        target = args[0].strip()
+        raw_path = _unquote(args[1]).strip().replace("\\", "/").lower()
+        line_number = self._eval_expr(args[2]) if len(args) >= 3 else 0
+        aut_match = re.search(r"(?:^|/)files/aut([1-7])\.txt$", raw_path)
+        if aut_match:
+            flag = int(aut_match.group(1))
+            value = 1 if self._aut_enabled(flag) else 0
+            self.logger.info(
+                "compat_getfileline_aut target=%s aut=%s line=%s enabled=%s value=%s",
+                target,
+                flag,
+                line_number,
+                self._aut_enabled(flag),
+                value,
+            )
+        else:
+            value = 0
+            self.logger.warning(
+                "compat_getfileline_unsupported target=%s path=%s line=%s value=%s",
+                target,
+                raw_path,
+                line_number,
+                value,
+            )
+        self.vars[target] = value
+
     def _find_pic(
         self,
         region: Region,
@@ -436,10 +488,12 @@ class DailyRunner:
         use_configured_threshold: bool = True,
     ) -> bool:
         self._checkpoint()
-        paths = tuple(self._resolve_image_path(path) for path in raw_paths)
-        threshold = self._effective_threshold(threshold) if use_configured_threshold else threshold
-        group = ImageGroup(name="|".join(path.name for path in paths), paths=paths, threshold=threshold)
-        match = self.matcher.match_any(group, region)
+        match = self._match_paths(
+            raw_paths,
+            region,
+            threshold,
+            use_configured_threshold=use_configured_threshold,
+        )
         if match is None:
             self.vars[out_x.strip()] = -1
             self.vars[out_y.strip()] = -1
@@ -456,6 +510,25 @@ class DailyRunner:
         )
         return True
 
+    def _match_paths(
+        self,
+        raw_paths: tuple[str, ...],
+        region: Region,
+        threshold: float,
+        *,
+        name: str | None = None,
+        use_configured_threshold: bool = True,
+    ) -> MatchResult | None:
+        self._checkpoint()
+        paths = tuple(self._resolve_image_path(path) for path in raw_paths)
+        threshold = self._effective_threshold(threshold) if use_configured_threshold else threshold
+        group = ImageGroup(
+            name=name or "|".join(path.name for path in paths),
+            paths=paths,
+            threshold=threshold,
+        )
+        return self.matcher.match_any(group, region)
+
     def _resolve_image_path(self, raw_path: str) -> Path:
         normalized = raw_path.strip().strip('"').replace("/", "\\")
         lower = normalized.lower()
@@ -469,6 +542,209 @@ class DailyRunner:
         if direct.exists():
             return direct
         return self.config.maple_story.image_root / normalized
+
+    def _run_clear_quest(self) -> None:
+        log_important(self.logger, "[Quest] Starting ClearQuest with AUT options")
+        self.vars["mapOrder"] = 0
+        selected_flags = []
+        for flag in range(7, 0, -1):
+            if self._aut_enabled(flag):
+                selected_flags.append(flag)
+            else:
+                log_important(self.logger, "[Quest] 跳过 AUT%s：配置未勾选", flag)
+
+        if not selected_flags:
+            log_important(self.logger, "[Quest] 未勾选任何 AUT 地图，跳过 ClearQuest")
+            return
+
+        for flag in selected_flags:
+            self.vars["mapFlag"] = flag
+            log_important(self.logger, "[Quest] 开始 AUT%s", flag)
+            self.execute_sub("ClearAUTGeneric")
+            self.execute_sub("CloseScheduler")
+            log_important(self.logger, "[Quest] 完成 AUT%s", flag)
+
+        log_important(self.logger, "[Quest] All enabled AUT maps completed, returning home")
+        self.execute_sub("Home")
+        log_important(self.logger, "[Quest] Executing F4+Left after Home()")
+        self.device.press_key(keycode("F4"), 1)
+        self.sleeper.delay_ms(500)
+        self.device.press_key(keycode("Left"), 1)
+        self.sleeper.delay_ms(200)
+
+    def _receive_daily_quest(self) -> str:
+        log_important(self.logger, "[ReceiveQuest] 开始接取每日任务")
+        self._ensure_scheduler_ui_open()
+
+        receive_button = self._match_combine_main_image("ReceiveButton", "ReceiveButton.png")
+        if receive_button is not None:
+            log_important(
+                self.logger,
+                "[ReceiveQuest] 检测到 ReceiveButton，点击接任务按钮",
+            )
+            self._click_match(receive_button, "ReceiveButton")
+            self._wait_for_received_mark()
+            self._close_scheduler_ui()
+            log_important(self.logger, "[ReceiveQuest] 接任务完成")
+            return "accepted"
+
+        received_mark = self._match_combine_main_image("ReceivedMark", "ReceivedMark.png")
+        if received_mark is not None:
+            log_important(self.logger, "[ReceiveQuest] 已检测到 ReceivedMark，今日任务已接")
+            self._close_scheduler_ui()
+            return "already_received"
+
+        log_important(
+            self.logger,
+            "[ReceiveQuest] 未检测到 ReceiveButton / ReceivedMark，判断今日任务已完成",
+        )
+        self._close_scheduler_ui()
+        return "done"
+
+    def _ensure_scheduler_ui_open(self) -> None:
+        for attempt in range(1, 9):
+            if self._match_scheduler_ui() is not None:
+                log_important(self.logger, "[ReceiveQuest] SchedulerUI 已打开")
+                return
+            log_important(
+                self.logger,
+                "[ReceiveQuest] SchedulerUI 未打开，第 %s 次按 [ 打开",
+                attempt,
+            )
+            self._press_scheduler_hotkey()
+        raise RuntimeError("ReceiveQuest failed: SchedulerUI was not detected after pressing '['.")
+
+    def _close_scheduler_ui(self) -> None:
+        for attempt in range(1, 4):
+            log_important(
+                self.logger,
+                "[ReceiveQuest] 第 %s 次按 [ 关闭 SchedulerUI",
+                attempt,
+            )
+            self._press_scheduler_hotkey(delay_ms=400)
+            if self._wait_for_scheduler_ui_hidden():
+                log_important(self.logger, "[ReceiveQuest] SchedulerUI 已关闭")
+                return
+            self.logger.info("[ReceiveQuest] SchedulerUI 关闭后仍可见，准备重试")
+        if self._scheduler_panel_visible():
+            self.logger.warning("[ReceiveQuest] SchedulerUI may still be open after close attempts")
+
+    def _wait_for_scheduler_ui_hidden(self) -> bool:
+        hidden_checks = 0
+        for check in range(1, 9):
+            if self._scheduler_panel_visible():
+                hidden_checks = 0
+                self.logger.info("[ReceiveQuest] SchedulerUI 关闭确认第 %s 次：仍可见", check)
+            else:
+                hidden_checks += 1
+                self.logger.info(
+                    "[ReceiveQuest] SchedulerUI 关闭确认第 %s 次：未检测到，连续 %s 次",
+                    check,
+                    hidden_checks,
+                )
+                if hidden_checks >= 2:
+                    return True
+            self.sleeper.delay_ms(150)
+        return False
+
+    def _scheduler_panel_visible(self) -> bool:
+        if self._match_scheduler_ui() is not None:
+            return True
+        if self._match_combine_main_image("ReceiveButton", "ReceiveButton.png") is not None:
+            return True
+        return self._match_combine_main_image("ReceivedMark", "ReceivedMark.png") is not None
+
+    def _wait_for_received_mark(self) -> None:
+        for attempt in range(1, 9):
+            if self._match_combine_main_image("ReceivedMark", "ReceivedMark.png") is not None:
+                log_important(
+                    self.logger,
+                    "[ReceiveQuest] 第 %s 次检测到 ReceivedMark，接任务成功",
+                    attempt,
+                )
+                return
+            log_important(
+                self.logger,
+                "[ReceiveQuest] 第 %s 次未检测到 ReceivedMark，继续等待",
+                attempt,
+            )
+            self.sleeper.delay_ms(250)
+        raise RuntimeError("ReceiveQuest failed: ReceivedMark was not detected after clicking ReceiveButton.")
+
+    def _match_scheduler_ui(self) -> MatchResult | None:
+        return self._match_combine_main_image(
+            "SchedulerUI",
+            "SchedulerUI.png",
+            region=self._scheduler_ui_region(),
+        )
+
+    def _scheduler_ui_region(self) -> Region:
+        window = self.window_info
+        if window is None:
+            return self._region("x1", "y1", "xEnd", "yEnd")
+        return Region.from_bounds(
+            window.x + int(window.width * 0.25),
+            window.y + int(window.height * 0.40),
+            window.right,
+            window.bottom,
+        )
+
+    def _match_combine_main_image(
+        self,
+        name: str,
+        filename: str,
+        *,
+        region: Region | None = None,
+    ) -> MatchResult | None:
+        match = self._match_paths(
+            (fr"CombineMain\{filename}",),
+            region or self._region("x1", "y1", "xEnd", "yEnd"),
+            1.0,
+            name=name,
+        )
+        if match is None:
+            self.logger.info("[ReceiveQuest] 未检测到 %s", name)
+        else:
+            self.logger.info(
+                "[ReceiveQuest] 检测到 %s at x=%s y=%s score=%.6f",
+                name,
+                match.x,
+                match.y,
+                match.score,
+            )
+        return match
+
+    def _click_match(self, match: MatchResult, label: str) -> None:
+        x = match.center_x
+        y = match.center_y
+        self.logger.info("[ReceiveQuest] click_%s x=%s y=%s", label, x, y)
+        self.device.move_to(x, y)
+        self.sleeper.delay_ms(50)
+        self.device.left_click(1)
+        self.sleeper.delay_ms(120)
+        self._move_mouse_nearby(x, y)
+
+    def _move_mouse_nearby(self, x: int, y: int) -> None:
+        window = self.window_info
+        if window is None:
+            self.device.move_relative(24, 24)
+            return
+        margin = 24
+        target_x = min(max(x + 48, window.x + margin), window.right - margin)
+        target_y = min(max(y + 32, window.y + margin), window.bottom - margin)
+        if abs(target_x - x) < 8 and abs(target_y - y) < 8:
+            target_x = min(max(x - 48, window.x + margin), window.right - margin)
+            target_y = min(max(y - 32, window.y + margin), window.bottom - margin)
+        self.logger.info("[ReceiveQuest] move_mouse_nearby x=%s y=%s", target_x, target_y)
+        self.device.move_to(round(target_x), round(target_y))
+
+    def _press_scheduler_hotkey(self, delay_ms: int = 250) -> None:
+        self.device.press_key(keycode("["), 1)
+        self.device.move_relative(24, 24)
+        self.sleeper.delay_ms(delay_ms)
+
+    def _aut_enabled(self, flag: int) -> bool:
+        return bool(self.options.get(f"aut{flag}", True))
 
     def _run_gugu(self) -> None:
         self.vars["wJam"] = 0
@@ -651,11 +927,26 @@ class DailyRunner:
         if len(parts) > 1:
             return "".join(str(self._eval_expr(part)) for part in parts)
         expression = expression.replace("<>", "!=")
-        env = _EvalEnv(self.vars, {"WaitKey": self._wait_key})
+        env = _EvalEnv(
+            self.vars,
+            {
+                "WaitKey": self._wait_key,
+                "GetTimeStamp": self._get_timestamp,
+                "getTimeStamp": self._get_timestamp,
+                "GetLED": self._get_led,
+            },
+        )
         return eval(expression, {"__builtins__": {}}, env)  # noqa: S307
 
     def _wait_key(self) -> int:
         raise RuntimeError("CombineMain manual WaitKey is not supported in the GUI runner.")
+
+    def _get_timestamp(self) -> float:
+        return time.monotonic()
+
+    def _get_led(self, led_index: int) -> int:
+        self.logger.debug("compat_get_led index=%s value=0", led_index)
+        return 0
 
     def _truthy(self, value: Any) -> bool:
         return bool(value)

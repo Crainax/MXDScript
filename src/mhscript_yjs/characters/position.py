@@ -12,6 +12,7 @@ from mhscript_yjs.windows.maple import WindowInfo
 
 
 ImageMatchFn = Callable[[str, tuple[str, ...], Region, float], MatchResult | None]
+CoordinateMatchFn = Callable[[Region, float], tuple[MatchResult | None, MatchResult | None]]
 PositionSink = Callable[["CharacterPosition"], None]
 WindowProvider = Callable[[], WindowInfo]
 
@@ -35,21 +36,24 @@ class PositionTracker:
     logger: Logger
     position_sink: PositionSink | None = None
     window_provider: WindowProvider | None = None
+    match_coordinates: CoordinateMatchFn | None = None
 
     def locate(self, *, recover: bool = True) -> CharacterPosition | None:
         self.refresh_window()
-        me = self._match_me()
+        region = self.minimap_region()
+        me, anchor = self._match_position_pair(region)
         if me is None and recover:
             self.logger.warning("[Position] 未检测到人物坐标，尝试左右微调后重试")
             self._nudge("Left")
-            me = self._match_me()
+            region = self.minimap_region()
+            me, anchor = self._match_position_pair(region)
             if me is None:
                 self._nudge("Right")
-                me = self._match_me()
+                region = self.minimap_region()
+                me, anchor = self._match_position_pair(region)
             if me is None:
                 self.device.move_to(self.window.x + self.window.width // 2, self.window.y + self.window.height // 2)
 
-        anchor = self._match_anchor()
         if me is None or anchor is None:
             self.logger.warning(
                 "[Position] 定位失败 me=%s anchor=%s",
@@ -97,19 +101,24 @@ class PositionTracker:
             self.window.bottom,
         )
 
-    def _match_me(self) -> MatchResult | None:
+    def _match_position_pair(self, region: Region) -> tuple[MatchResult | None, MatchResult | None]:
+        if self.match_coordinates is not None:
+            return self.match_coordinates(region, 1.0)
+        return self._match_me(region), self._match_anchor(region)
+
+    def _match_me(self, region: Region) -> MatchResult | None:
         return self.match_image(
             "Character.Me",
             (r"E:\MHImg\Me.bmp",),
-            self.minimap_region(),
+            region,
             1.0,
         )
 
-    def _match_anchor(self) -> MatchResult | None:
+    def _match_anchor(self, region: Region) -> MatchResult | None:
         return self.match_image(
             "Character.MapAnchor",
             (r"E:\MHImg\MapAnchor.bmp",),
-            self.minimap_region(),
+            region,
             1.0,
         )
 

@@ -149,6 +149,65 @@ class VisionMatcherTests(unittest.TestCase):
         self.assertEqual([(match.x, match.y) for match in matches["a"]], [(2, 1)])
         self.assertEqual([(match.x, match.y) for match in matches["b"]], [(6, 5)])
 
+    def test_pixel_match_all_allows_color_tolerance_and_bad_pixels(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            template_path = Path(directory) / "template.bmp"
+            template = np.array(
+                [
+                    [(10, 20, 30), (20, 30, 40), (30, 40, 50)],
+                    [(40, 50, 60), (50, 60, 70), (60, 70, 80)],
+                    [(70, 80, 90), (80, 90, 100), (90, 100, 110)],
+                ],
+                dtype=np.uint8,
+            )
+            cv2.imwrite(str(template_path), template)
+
+            haystack = np.zeros((8, 8, 3), dtype=np.uint8)
+            noisy = template.copy()
+            noisy[0, 0] = (200, 200, 200)
+            noisy[1, 1] = noisy[1, 1] + 8
+            haystack[3:6, 2:5] = noisy
+            matcher = TemplateMatcher(FakeCapture(haystack), logger=logging.getLogger("test.matcher"))
+
+            matches = matcher.match_pixel_all(
+                ImageGroup("pixel", (template_path,), 1.0),
+                Region(x=0, y=0, width=8, height=8),
+                color_tolerance=10,
+                allowed_bad_pixels=1,
+            )
+
+        self.assertEqual([(match.x, match.y) for match in matches], [(2, 3)])
+        self.assertAlmostEqual(matches[0].score, 8 / 9)
+
+    def test_pixel_match_groups_captures_once_for_multiple_groups(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            template_a_path = Path(directory) / "pixel_a.bmp"
+            template_b_path = Path(directory) / "pixel_b.bmp"
+            template_a = np.full((2, 2, 3), (10, 20, 30), dtype=np.uint8)
+            template_b = np.full((2, 2, 3), (70, 80, 90), dtype=np.uint8)
+            cv2.imwrite(str(template_a_path), template_a)
+            cv2.imwrite(str(template_b_path), template_b)
+
+            haystack = np.zeros((8, 8, 3), dtype=np.uint8)
+            haystack[1:3, 2:4] = template_a
+            haystack[5:7, 4:6] = template_b
+            capture = FakeCapture(haystack)
+            matcher = TemplateMatcher(capture, logger=logging.getLogger("test.matcher"))
+
+            matches = matcher.match_pixel_groups(
+                (
+                    ImageGroup("a", (template_a_path,), 1.0),
+                    ImageGroup("b", (template_b_path,), 1.0),
+                ),
+                Region(x=0, y=0, width=8, height=8),
+                color_tolerance=0,
+                allowed_bad_pixels=0,
+            )
+
+        self.assertEqual(capture.calls, 1)
+        self.assertEqual([(match.x, match.y) for match in matches["a"]], [(2, 1)])
+        self.assertEqual([(match.x, match.y) for match in matches["b"]], [(4, 5)])
+
 
 if __name__ == "__main__":
     unittest.main()

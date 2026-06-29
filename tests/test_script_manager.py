@@ -115,6 +115,61 @@ class ScriptManagerTests(unittest.TestCase):
                 else:
                     os.environ["LOCALAPPDATA"] = old
 
+    def test_starting_another_script_stops_active_script_first(self) -> None:
+        first_ready = threading.Event()
+        first_stopped = threading.Event()
+        second_ran = threading.Event()
+
+        def first_runner(context: ScriptRunContext) -> ScriptRunResult:
+            first_ready.set()
+            while not context.control.stop_requested():
+                time.sleep(0.01)
+            first_stopped.set()
+            return ScriptRunResult(exit_reason="stop_requested")
+
+        def second_runner(context: ScriptRunContext) -> ScriptRunResult:
+            second_ran.set()
+            return ScriptRunResult(exit_reason="completed")
+
+        first = ScriptDefinition(
+            id="first",
+            name="第一个脚本",
+            category="测试",
+            description="长运行脚本。",
+            module="tests.test_script_manager",
+            default_shortcut="F7",
+            runner=first_runner,
+        )
+        second = ScriptDefinition(
+            id="second",
+            name="第二个脚本",
+            category="测试",
+            description="短脚本。",
+            module="tests.test_script_manager",
+            default_shortcut="F8",
+            runner=second_runner,
+        )
+
+        with tempfile.TemporaryDirectory() as appdata:
+            old = os.environ.get("LOCALAPPDATA")
+            os.environ["LOCALAPPDATA"] = appdata
+            try:
+                manager = ScriptManager((first, second))
+                manager.start("first", skip_delays=True)
+                self.assertTrue(_wait_until(lambda: first_ready.is_set()))
+
+                manager.start("second", skip_delays=True)
+
+                self.assertTrue(first_stopped.is_set())
+                self.assertTrue(_wait_until(lambda: second_ran.is_set()))
+                self.assertTrue(_wait_until(lambda: _status(manager, "second") == "finished"))
+                time.sleep(0.1)
+            finally:
+                if old is None:
+                    os.environ.pop("LOCALAPPDATA", None)
+                else:
+                    os.environ["LOCALAPPDATA"] = old
+
 
 @dataclass
 class FakeMousePrecision:

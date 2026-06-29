@@ -166,6 +166,141 @@ class TemplateMatcher:
             )
         return results
 
+    def match_pixel_any(
+        self,
+        group: ImageGroup,
+        region: Region,
+        *,
+        color_tolerance: int = 18,
+        allowed_bad_pixels: int = 2,
+    ) -> MatchResult | None:
+        matches = self.match_pixel_all(
+            group,
+            region,
+            limit=1,
+            color_tolerance=color_tolerance,
+            allowed_bad_pixels=allowed_bad_pixels,
+        )
+        return matches[0] if matches else None
+
+    def match_pixel_all(
+        self,
+        group: ImageGroup,
+        region: Region,
+        *,
+        limit: int = 200,
+        color_tolerance: int = 18,
+        allowed_bad_pixels: int = 2,
+    ) -> list[MatchResult]:
+        start = time.perf_counter()
+        haystack = self.capture.capture_region(region)
+        return self.match_pixel_all_in(
+            haystack,
+            group,
+            region,
+            limit=limit,
+            color_tolerance=color_tolerance,
+            allowed_bad_pixels=allowed_bad_pixels,
+            start=start,
+        )
+
+    def match_pixel_all_in(
+        self,
+        haystack: object,
+        group: ImageGroup,
+        region: Region,
+        *,
+        limit: int = 200,
+        color_tolerance: int = 18,
+        allowed_bad_pixels: int = 2,
+        start: float | None = None,
+    ) -> list[MatchResult]:
+        start = time.perf_counter() if start is None else start
+        matches: list[MatchResult] = []
+        best: MatchResult | None = None
+
+        for image_path in group.paths:
+            template, mask = self._load_template(image_path)
+            image_matches, image_best = self._match_pixels_many_with_best(
+                haystack=haystack,
+                template=template,
+                mask=mask,
+                region=region,
+                group=group.name,
+                image_path=image_path,
+                threshold=group.threshold,
+                color_tolerance=color_tolerance,
+                allowed_bad_pixels=allowed_bad_pixels,
+            )
+            matches.extend(image_matches)
+            if image_best is not None and (best is None or image_best.score > best.score):
+                best = image_best
+
+        matches.sort(key=lambda item: (-item.score, item.y, item.x, str(item.image_path)))
+        if limit > 0:
+            matches = matches[:limit]
+
+        if self.logger:
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            if best is not None:
+                self.logger.debug(
+                    "findpic_pixel_all group=%s count=%s best=%s x=%s y=%s best_score=%.9f threshold=%.6f color_tolerance=%s allowed_bad_pixels=%s elapsed_ms=%.2f",
+                    group.name,
+                    len(matches),
+                    best.image_path,
+                    best.x,
+                    best.y,
+                    best.score,
+                    group.threshold,
+                    color_tolerance,
+                    allowed_bad_pixels,
+                    elapsed_ms,
+                )
+            else:
+                self.logger.debug(
+                    "findpic_pixel_all group=%s count=%s no_match threshold=%.6f color_tolerance=%s allowed_bad_pixels=%s elapsed_ms=%.2f",
+                    group.name,
+                    len(matches),
+                    group.threshold,
+                    color_tolerance,
+                    allowed_bad_pixels,
+                    elapsed_ms,
+                )
+        return matches
+
+    def match_pixel_groups(
+        self,
+        groups: Iterable[ImageGroup],
+        region: Region,
+        *,
+        limit: int = 200,
+        color_tolerance: int = 18,
+        allowed_bad_pixels: int = 2,
+    ) -> dict[str, list[MatchResult]]:
+        start = time.perf_counter()
+        haystack = self.capture.capture_region(region)
+        results = {
+            group.name: self.match_pixel_all_in(
+                haystack,
+                group,
+                region,
+                limit=limit,
+                color_tolerance=color_tolerance,
+                allowed_bad_pixels=allowed_bad_pixels,
+            )
+            for group in groups
+        }
+        if self.logger:
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            self.logger.debug(
+                "findpic_pixel_groups groups=%s color_tolerance=%s allowed_bad_pixels=%s elapsed_ms=%.2f",
+                ",".join(results.keys()),
+                color_tolerance,
+                allowed_bad_pixels,
+                elapsed_ms,
+            )
+        return results
+
     def _load_template(self, image_path: Path) -> tuple[object, object | None]:
         image_path = image_path.resolve()
         if image_path in self._cache:
@@ -327,6 +462,92 @@ class TemplateMatcher:
                     width=int(template_width),
                     height=int(template_height),
                     score=1.0 - float(min_value),
+                )
+            )
+        return results, best
+
+    def _match_pixels_many_with_best(
+        self,
+        *,
+        haystack: object,
+        template: object,
+        mask: object | None,
+        region: Region,
+        group: str,
+        image_path: Path,
+        threshold: float,
+        color_tolerance: int,
+        allowed_bad_pixels: int,
+    ) -> tuple[list[MatchResult], MatchResult | None]:
+        import cv2
+        import numpy as np
+
+        template_height, template_width = template.shape[:2]
+        haystack_height, haystack_width = haystack.shape[:2]
+        if template_width > haystack_width or template_height > haystack_height:
+            if self.logger:
+                self.logger.warning(
+                    "template_larger_than_region group=%s image=%s template=%sx%s region=%sx%s",
+                    group,
+                    image_path,
+                    template_width,
+                    template_height,
+                    haystack_width,
+                    haystack_height,
+                )
+            return [], None
+
+        valid_mask = np.ones((template_height, template_width), dtype=bool)
+        if mask is not None:
+            valid_mask = mask > 0
+        valid_count = int(np.count_nonzero(valid_mask))
+        if valid_count <= 0:
+            return [], None
+
+        windows = np.lib.stride_tricks.sliding_window_view(
+            haystack,
+            (template_height, template_width),
+            axis=(0, 1),
+        )
+        windows = np.moveaxis(windows, 2, -1)
+        diff = np.abs(windows.astype(np.int16) - template.astype(np.int16))
+        pixel_ok = np.all(diff <= max(0, int(color_tolerance)), axis=-1)
+        good_counts = pixel_ok[..., valid_mask].sum(axis=-1)
+        misses = valid_count - good_counts
+        scores = good_counts.astype(np.float32) / float(valid_count)
+
+        best_y, best_x = (int(item) for item in np.unravel_index(np.argmax(scores), scores.shape))
+        best = MatchResult(
+            group=group,
+            image_path=image_path,
+            x=region.x + best_x,
+            y=region.y + best_y,
+            width=int(template_width),
+            height=int(template_height),
+            score=float(scores[best_y, best_x]),
+        )
+
+        accepted = (
+            (scores >= threshold - 1e-9)
+            | (misses <= max(0, int(allowed_bad_pixels)))
+        ).astype(np.uint8)
+        if not np.any(accepted):
+            return [], best
+
+        count, labels = cv2.connectedComponents(accepted, connectivity=8)
+        results: list[MatchResult] = []
+        for label in range(1, count):
+            component_mask = (labels == label).astype(np.uint8)
+            _, max_value, _, max_location = cv2.minMaxLoc(scores, mask=component_mask)
+            results.append(
+                MatchResult(
+                    group=group,
+                    image_path=image_path,
+                    x=region.x + int(max_location[0]),
+                    y=region.y + int(max_location[1]),
+                    width=int(template_width),
+                    height=int(template_height),
+                    score=float(max_value),
                 )
             )
         return results, best

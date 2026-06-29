@@ -70,7 +70,11 @@ class GuiApiTests(unittest.TestCase):
             api = GuiApi()
             response = api.save_script_options(
                 "image_recognition",
-                {"imagePath": r"D:\Project\MXDScript\assets\CombineMain\SchedulerUI.png", "matchThreshold": 0},
+                {
+                    "imagePath": r"D:\Project\MXDScript\assets\CombineMain\SchedulerUI.png",
+                    "matchThreshold": 0,
+                    "intervalSeconds": 0.1,
+                },
             )
             state = GuiApi().get_state()
 
@@ -80,6 +84,20 @@ class GuiApiTests(unittest.TestCase):
             r"D:\Project\MXDScript\assets\CombineMain\SchedulerUI.png",
         )
         self.assertEqual(state["settings"]["scriptOptions"]["image_recognition"]["matchThreshold"], 0.0)
+        self.assertEqual(state["settings"]["scriptOptions"]["image_recognition"]["intervalSeconds"], 0.1)
+
+    def test_debug_script_interval_is_clamped_independently_from_threshold(self) -> None:
+        with _temporary_local_appdata():
+            api = GuiApi()
+            response = api.save_script_options(
+                "coordinate_detector",
+                {"intervalSeconds": 5, "matchThreshold": 2},
+            )
+            state = GuiApi().get_state()
+
+        self.assertTrue(response["ok"])
+        self.assertEqual(state["settings"]["scriptOptions"]["coordinate_detector"]["intervalSeconds"], 5.0)
+        self.assertEqual(state["settings"]["scriptOptions"]["coordinate_detector"]["matchThreshold"], 1.0)
 
 class _temporary_local_appdata:
     def __init__(self) -> None:

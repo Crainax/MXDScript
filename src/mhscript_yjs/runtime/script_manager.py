@@ -93,9 +93,10 @@ class ScriptManager:
         script_options: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         definition = self._require_definition(script_id)
+        self._stop_active_before_start()
         with self._lock:
             if self._active_script_id is not None:
-                raise RuntimeError("已有脚本正在运行，请先暂停或停止当前脚本。")
+                raise RuntimeError("当前脚本还在停止中，请稍后再启动新脚本。")
 
             controller = PauseController()
             self._controller = controller
@@ -114,6 +115,25 @@ class ScriptManager:
 
         self._emit_state(script_id, "running")
         return self.snapshot()
+
+    def _stop_active_before_start(self) -> None:
+        with self._lock:
+            script_id = self._active_script_id
+            controller = self._controller
+            worker = self._worker
+            mouse_precision = self._mouse_precision
+            if script_id is None or controller is None:
+                return
+            if self._states[script_id] in {"running", "paused"}:
+                controller.stop()
+                self._states[script_id] = "stopping"
+            elif self._states[script_id] != "stopping":
+                return
+
+        self._restore_mouse_precision(script_id, mouse_precision)
+        self._emit_state(script_id, "stopping")
+        if worker is not None and worker.is_alive() and worker is not threading.current_thread():
+            worker.join(timeout=10)
 
     def pause(self) -> dict[str, Any]:
         with self._lock:
@@ -245,6 +265,8 @@ class ScriptManager:
                 result.exit_reason,
                 result.iterations,
             )
+            close_logger_handlers(logger)
+            logger = None
             with self._lock:
                 self._last_results[script_id] = payload
                 self._states[script_id] = "finished"
@@ -257,6 +279,8 @@ class ScriptManager:
             message = _format_exception_message(exc)
             if logger is not None:
                 logger.exception("脚本异常退出：%s", message)
+                close_logger_handlers(logger)
+                logger = None
             with self._lock:
                 self._last_results[script_id] = {
                     "exitReason": "error",

@@ -40,6 +40,8 @@ DEFAULT_DAILY_OPTIONS = {
     "matchThreshold": DEFAULT_MATCH_THRESHOLD,
 }
 JOB_DETECTION_THRESHOLD = 0.99
+COORDINATE_PIXEL_COLOR_TOLERANCE = 18
+COORDINATE_PIXEL_ALLOWED_BAD_PIXELS = 2
 
 
 @dataclass(frozen=True)
@@ -601,6 +603,7 @@ class DailyRunner:
             logger=self.logger,
             position_sink=self._sync_character_position,
             window_provider=self._current_window_info,
+            match_coordinates=self._match_character_coordinates,
         )
         actions = CharacterActions(self.device, self.sleeper, self.logger)
         controller_kwargs = {
@@ -624,6 +627,46 @@ class DailyRunner:
         threshold: float,
     ) -> MatchResult | None:
         return self._match_paths(raw_paths, region, threshold, name=name)
+
+    def _match_character_coordinates(
+        self,
+        region: Region,
+        threshold: float,
+    ) -> tuple[MatchResult | None, MatchResult | None]:
+        if not hasattr(self.matcher, "match_pixel_groups"):
+            me = self._match_character_image("Character.Me", (r"E:\MHImg\Me.bmp",), region, threshold)
+            anchor = self._match_character_image(
+                "Character.MapAnchor",
+                (r"E:\MHImg\MapAnchor.bmp",),
+                region,
+                threshold,
+            )
+            return me, anchor
+        effective_threshold = self._effective_threshold(threshold)
+        me_path = self._resolve_image_path(r"E:\MHImg\Me.bmp")
+        anchor_path = self._resolve_image_path(r"E:\MHImg\MapAnchor.bmp")
+        groups = (
+            ImageGroup("Character.Me", (me_path,), effective_threshold),
+            ImageGroup("Character.MapAnchor", (anchor_path,), effective_threshold),
+        )
+        matches = self.matcher.match_pixel_groups(
+            groups,
+            region,
+            limit=20,
+            color_tolerance=COORDINATE_PIXEL_COLOR_TOLERANCE,
+            allowed_bad_pixels=COORDINATE_PIXEL_ALLOWED_BAD_PIXELS,
+        )
+        me = next(iter(matches.get("Character.Me", [])), None)
+        anchor = next(iter(matches.get("Character.MapAnchor", [])), None)
+        self.logger.info(
+            "[Position] pixel_match me=%s anchor=%s threshold=%.3f color_tolerance=%s allowed_bad_pixels=%s",
+            "yes" if me else "no",
+            "yes" if anchor else "no",
+            effective_threshold,
+            COORDINATE_PIXEL_COLOR_TOLERANCE,
+            COORDINATE_PIXEL_ALLOWED_BAD_PIXELS,
+        )
+        return me, anchor
 
     def _current_window_info(self) -> WindowInfo:
         self._refresh_window_position()

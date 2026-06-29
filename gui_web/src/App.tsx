@@ -502,7 +502,7 @@ function ScriptControlPanel(props: {
   onStop: () => void;
 }) {
   const isActive = props.activeScript?.id === props.script.id;
-  const canStart = !props.activeScript;
+  const canStart = !isActive;
   const canPause = isActive && props.script.status === "running";
   const canResume = isActive && props.script.status === "paused";
   const canStop = isActive && (props.script.status === "running" || props.script.status === "paused");
@@ -634,8 +634,10 @@ function ImageRecognitionOptionsPanel(props: {
 }) {
   const imagePathValue = optionString(props.options.imagePath, "");
   const thresholdValue = optionNumber(props.options.matchThreshold, 0.95);
+  const intervalValue = optionNumber(props.options.intervalSeconds, 0.5);
   const [imagePathText, setImagePathText] = useState(imagePathValue);
   const [thresholdText, setThresholdText] = useState(formatThreshold(thresholdValue));
+  const [intervalText, setIntervalText] = useState(formatThreshold(intervalValue));
 
   useEffect(() => {
     setImagePathText(imagePathValue);
@@ -644,6 +646,10 @@ function ImageRecognitionOptionsPanel(props: {
   useEffect(() => {
     setThresholdText(formatThreshold(thresholdValue));
   }, [thresholdValue]);
+
+  useEffect(() => {
+    setIntervalText(formatThreshold(intervalValue));
+  }, [intervalValue]);
 
   const commitImagePath = useCallback(() => {
     props.onChange("imagePath", imagePathText.trim());
@@ -659,6 +665,17 @@ function ImageRecognitionOptionsPanel(props: {
     setThresholdText(formatThreshold(clampedValue));
     props.onChange("matchThreshold", clampedValue);
   }, [props, thresholdText, thresholdValue]);
+
+  const commitInterval = useCallback(() => {
+    const nextValue = Number(intervalText);
+    if (!Number.isFinite(nextValue)) {
+      setIntervalText(formatThreshold(intervalValue));
+      return;
+    }
+    const clampedValue = clampIntervalSeconds(nextValue);
+    setIntervalText(formatThreshold(clampedValue));
+    props.onChange("intervalSeconds", clampedValue);
+  }, [intervalText, intervalValue, props]);
 
   return (
     <section className="debug-options-panel">
@@ -697,6 +714,21 @@ function ImageRecognitionOptionsPanel(props: {
           }}
         />
       </label>
+      <label className="debug-field compact">
+        <span>检测间隔</span>
+        <input
+          type="text"
+          inputMode="decimal"
+          value={intervalText}
+          onBlur={commitInterval}
+          onChange={(event) => setIntervalText(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.currentTarget.blur();
+            }
+          }}
+        />
+      </label>
       <ImageRecognitionResult data={props.data} />
     </section>
   );
@@ -708,11 +740,17 @@ function CoordinateDetectorOptionsPanel(props: {
   onChange: (key: string, value: ScriptOptionValue) => void;
 }) {
   const thresholdValue = optionNumber(props.options.matchThreshold, 0.95);
+  const intervalValue = optionNumber(props.options.intervalSeconds, 0.5);
   const [thresholdText, setThresholdText] = useState(formatThreshold(thresholdValue));
+  const [intervalText, setIntervalText] = useState(formatThreshold(intervalValue));
 
   useEffect(() => {
     setThresholdText(formatThreshold(thresholdValue));
   }, [thresholdValue]);
+
+  useEffect(() => {
+    setIntervalText(formatThreshold(intervalValue));
+  }, [intervalValue]);
 
   const commitThreshold = useCallback(() => {
     const nextValue = Number(thresholdText);
@@ -724,6 +762,17 @@ function CoordinateDetectorOptionsPanel(props: {
     setThresholdText(formatThreshold(clampedValue));
     props.onChange("matchThreshold", clampedValue);
   }, [props, thresholdText, thresholdValue]);
+
+  const commitInterval = useCallback(() => {
+    const nextValue = Number(intervalText);
+    if (!Number.isFinite(nextValue)) {
+      setIntervalText(formatThreshold(intervalValue));
+      return;
+    }
+    const clampedValue = clampIntervalSeconds(nextValue);
+    setIntervalText(formatThreshold(clampedValue));
+    props.onChange("intervalSeconds", clampedValue);
+  }, [intervalText, intervalValue, props]);
 
   return (
     <section className="debug-options-panel">
@@ -741,6 +790,21 @@ function CoordinateDetectorOptionsPanel(props: {
           value={thresholdText}
           onBlur={commitThreshold}
           onChange={(event) => setThresholdText(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.currentTarget.blur();
+            }
+          }}
+        />
+      </label>
+      <label className="debug-field compact">
+        <span>检测间隔</span>
+        <input
+          type="text"
+          inputMode="decimal"
+          value={intervalText}
+          onBlur={commitInterval}
+          onChange={(event) => setIntervalText(event.target.value)}
           onKeyDown={(event) => {
             if (event.key === "Enter") {
               event.currentTarget.blur();
@@ -781,6 +845,9 @@ function CoordinateDetectorResult({ data }: { data?: Record<string, unknown> }) 
   const missingImages = payloadUnknownArray(data, "missingImages");
   const message = payloadString(data, "message", "等待运行...");
   const anchorStatus = payloadString(data, "anchorStatus", "");
+  const peopleStatus = payloadString(data, "peopleStatus", "");
+  const teleportStatus = payloadString(data, "teleportStatus", "");
+  const runeStatus = payloadString(data, "runeStatus", "");
   const updatedAt = payloadString(data, "updatedAt", "");
   return (
     <div className="debug-result">
@@ -792,6 +859,11 @@ function CoordinateDetectorResult({ data }: { data?: Record<string, unknown> }) 
         <div className="debug-warning">{missingImages.map(String).join("\n")}</div>
       ) : null}
       {anchorStatus ? <div className="debug-anchor-status">MapAnchor: {anchorStatus}</div> : null}
+      {peopleStatus || teleportStatus || runeStatus ? (
+        <div className="debug-anchor-status">
+          人物: {peopleStatus || "-"} · 传送门: {teleportStatus || "-"} · 轮: {runeStatus || "-"}
+        </div>
+      ) : null}
       <div className="coordinate-labels">
         <div className="coordinate-label">
           <span>人物坐标</span>
@@ -1013,6 +1085,10 @@ function clampMatchThreshold(value: number): number {
 
 function clampUnitThreshold(value: number): number {
   return Math.min(1, Math.max(0, value));
+}
+
+function clampIntervalSeconds(value: number): number {
+  return Math.min(10, Math.max(0.05, value));
 }
 
 function formatThreshold(value: number): string {

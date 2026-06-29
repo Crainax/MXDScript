@@ -101,10 +101,10 @@ class GuiApi:
         if isinstance(existing, dict):
             for key, value in existing.items():
                 if key in merged:
-                    merged[key] = _coerce_script_option(merged[key], value)
+                    merged[key] = _coerce_script_option(key, merged[key], value)
         for key, value in options.items():
             if key in merged:
-                merged[key] = _coerce_script_option(merged[key], value)
+                merged[key] = _coerce_script_option(key, merged[key], value)
 
         current[script_id] = merged
         settings["scriptOptions"] = _normalize_script_options(self.manager, current)
@@ -208,6 +208,12 @@ class GuiApi:
                 return
 
             if active_script_id != script_id:
+                self.manager.start(
+                    script_id,
+                    dry_run=bool(settings.get("dryRun", False)),
+                    skip_delays=bool(settings.get("skipDelays", False)),
+                    script_options=_script_options_for(settings, script_id),
+                )
                 return
 
             script = next(
@@ -258,7 +264,7 @@ def _normalize_script_options(
         merged = dict(normalized[script_id])
         for key, value in options.items():
             if key in merged:
-                merged[key] = _coerce_script_option(merged[key], value)
+                merged[key] = _coerce_script_option(key, merged[key], value)
         normalized[script_id] = merged
     return normalized
 
@@ -271,7 +277,7 @@ def _default_script_option_value(value: Any) -> Any:
     return value
 
 
-def _coerce_script_option(default_value: Any, value: Any) -> Any:
+def _coerce_script_option(key: str, default_value: Any, value: Any) -> Any:
     if isinstance(default_value, bool):
         return bool(value)
     if isinstance(default_value, (int, float)):
@@ -281,6 +287,8 @@ def _coerce_script_option(default_value: Any, value: Any) -> Any:
             return float(default_value)
         if not math.isfinite(number):
             return float(default_value)
+        if key == "intervalSeconds":
+            return max(0.05, min(10.0, number))
         if 0.0 <= float(default_value) <= 1.0:
             return max(0.0, min(1.0, number))
         return number

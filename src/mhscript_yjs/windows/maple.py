@@ -73,6 +73,15 @@ def find_window(fragment: str) -> WindowInfo:
     return get_client_window_info(hwnd)
 
 
+def refresh_window_info(previous: WindowInfo | None, fragment: str) -> WindowInfo:
+    if previous is not None:
+        try:
+            return get_client_window_info(previous.hwnd)
+        except Exception:
+            pass
+    return find_window(fragment)
+
+
 def get_client_window_info(hwnd: int) -> WindowInfo:
     user32 = ctypes.WinDLL("user32", use_last_error=True)
     rect = _RECT()

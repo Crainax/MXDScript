@@ -16,7 +16,7 @@ from mhscript_yjs.runtime.timing import NullSleeper, Sleeper
 from mhscript_yjs.vision.matcher import TemplateMatcher
 from mhscript_yjs.vision.screenshot import MssScreenCapture
 from mhscript_yjs.vision.types import ImageGroup, MatchResult, Region
-from mhscript_yjs.windows.maple import WindowInfo, find_window
+from mhscript_yjs.windows.maple import WindowInfo, find_window, refresh_window_info
 
 
 @dataclass(frozen=True)
@@ -52,6 +52,7 @@ class OpenPackageRunner:
         self.sleeper = sleeper
         self.logger = logger
         self.window_info = window_info
+        self._dynamic_window = window_info is None
         self.control = control or NullRunControl()
         self.groups = build_groups(config)
         self.next_after_confirm = 2
@@ -60,7 +61,8 @@ class OpenPackageRunner:
 
     def run(self, *, max_iterations: int | None = None) -> OpenPackageResult:
         window = self.window_info or find_window(self.config.maple_story.window_title)
-        region = Region.from_bounds(window.x, window.y, window.right, window.bottom)
+        self.window_info = window
+        region = _window_region(window)
         self.logger.info(
             "自动开包开始：窗口=%r，客户区=(%s,%s %sx%s)。",
             window.title,
@@ -101,6 +103,8 @@ class OpenPackageRunner:
                     self.no_find_count,
                     self.next_after_confirm,
                 )
+                window = self._current_window()
+                region = _window_region(window)
 
                 confirm = self._match_any(self.groups.confirm, region)
                 if confirm:
@@ -341,6 +345,30 @@ class OpenPackageRunner:
         self._checkpoint()
         return self.matcher.match_any(group, region)
 
+    def _current_window(self) -> WindowInfo:
+        if not self._dynamic_window:
+            if self.window_info is None:
+                self.window_info = find_window(self.config.maple_story.window_title)
+            return self.window_info
+        previous = self.window_info
+        window = refresh_window_info(previous, self.config.maple_story.window_title)
+        if previous is None or (
+            previous.x,
+            previous.y,
+            previous.width,
+            previous.height,
+        ) != (window.x, window.y, window.width, window.height):
+            self.logger.info(
+                "open_package_window_refreshed hwnd=%s client=(%s,%s %sx%s)",
+                window.hwnd,
+                window.x,
+                window.y,
+                window.width,
+                window.height,
+            )
+        self.window_info = window
+        return window
+
     def _checkpoint(self) -> None:
         self.control.wait_if_paused()
         if self.control.stop_requested():
@@ -368,6 +396,10 @@ def _group(name: str, image_root: Path, paths: tuple[str, ...], threshold: float
         paths=tuple(image_root / path for path in paths),
         threshold=threshold,
     )
+
+
+def _window_region(window: WindowInfo) -> Region:
+    return Region.from_bounds(window.x, window.y, window.right, window.bottom)
 
 
 def create_runner(

@@ -199,8 +199,8 @@ class DailyScriptTests(unittest.TestCase):
             matcher=SequenceMatcher(
                 {
                     "SchedulerUI": [False, True, True, False],
-                    "ReceiveButton": [True],
-                    "ReceivedMark": [True],
+                    "ReceiveButton": [False, True],
+                    "ReceivedMark": [False, True],
                 }
             ),  # type: ignore[arg-type]
             sleeper=NullSleeper(),

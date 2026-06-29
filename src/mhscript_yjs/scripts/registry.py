@@ -12,7 +12,19 @@ from mhscript_yjs.scripts.daily.combine_main import (
     DEFAULT_DAILY_OPTIONS,
     create_runner as create_daily_runner,
 )
+from mhscript_yjs.scripts.tool.image_debug import (
+    COORDINATE_DETECTOR_SCRIPT_ID,
+    DEFAULT_COORDINATE_DETECTOR_OPTIONS,
+    DEFAULT_IMAGE_RECOGNITION_OPTIONS,
+    IMAGE_RECOGNITION_SCRIPT_ID,
+    run_coordinate_detector,
+    run_image_recognition,
+)
 from mhscript_yjs.scripts.tool.open_package import create_runner
+
+
+def _noop_emit_data(payload: Mapping[str, Any]) -> None:
+    return None
 
 
 @dataclass(frozen=True)
@@ -23,6 +35,7 @@ class ScriptRunContext:
     dry_run: bool
     skip_delays: bool
     script_options: Mapping[str, Any] = field(default_factory=dict)
+    emit_data: Callable[[Mapping[str, Any]], None] = _noop_emit_data
 
 
 @dataclass(frozen=True)
@@ -76,6 +89,30 @@ def get_script_definitions() -> tuple[ScriptDefinition, ...]:
             requires_mouse_precision=True,
             default_options=DEFAULT_DAILY_OPTIONS,
         ),
+        ScriptDefinition(
+            id=IMAGE_RECOGNITION_SCRIPT_ID,
+            name="识别图片",
+            category="测试",
+            description="按指定图片路径持续检测命中坐标。",
+            module="mhscript_yjs.scripts.tool.image_debug",
+            default_shortcut="",
+            runner=_run_image_recognition,
+            placeholder=False,
+            requires_mouse_precision=False,
+            default_options=DEFAULT_IMAGE_RECOGNITION_OPTIONS,
+        ),
+        ScriptDefinition(
+            id=COORDINATE_DETECTOR_SCRIPT_ID,
+            name="检测坐标",
+            category="测试",
+            description="持续检测 Me、Teleport 相对 MapAnchor 的坐标。",
+            module="mhscript_yjs.scripts.tool.image_debug",
+            default_shortcut="",
+            runner=_run_coordinate_detector,
+            placeholder=False,
+            requires_mouse_precision=False,
+            default_options=DEFAULT_COORDINATE_DETECTOR_OPTIONS,
+        ),
         _placeholder(
             script_id="event_placeholder",
             name="活动脚本占位",
@@ -96,6 +133,24 @@ def get_script_definitions() -> tuple[ScriptDefinition, ...]:
         ),
         )
         if not definition.placeholder
+    )
+
+
+def _run_image_recognition(context: ScriptRunContext) -> ScriptRunResult:
+    result = run_image_recognition(context)
+    return ScriptRunResult(
+        exit_reason=result.exit_reason,
+        iterations=result.iterations,
+        details=dict(result.details),
+    )
+
+
+def _run_coordinate_detector(context: ScriptRunContext) -> ScriptRunResult:
+    result = run_coordinate_detector(context)
+    return ScriptRunResult(
+        exit_reason=result.exit_reason,
+        iterations=result.iterations,
+        details=dict(result.details),
     )
 
 

@@ -105,6 +105,7 @@ button {
 .brand-panel,
 .control-surface,
 .daily-options-panel,
+.debug-options-panel,
 .log-panel,
 .notice {
   border: 1px solid var(--border);
@@ -350,7 +351,8 @@ h2 {
   padding: 18px;
 }
 
-.daily-options-panel {
+.daily-options-panel,
+.debug-options-panel {
   padding: 16px;
 }
 
@@ -426,6 +428,107 @@ h2 {
 
 :root[data-theme="light"] .daily-threshold input {
   background: rgba(255, 255, 255, 0.7);
+}
+
+.debug-field {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.debug-field.compact {
+  grid-template-columns: minmax(0, 1fr) 118px;
+  align-items: center;
+}
+
+.debug-field input {
+  width: 100%;
+  min-width: 0;
+  height: 34px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.18);
+  color: var(--text);
+  padding: 0 10px;
+}
+
+.debug-field.compact input {
+  text-align: right;
+}
+
+:root[data-theme="light"] .debug-field input {
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.debug-result {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+
+.debug-result-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--primary);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.debug-result-list,
+.debug-warning {
+  min-height: 38px;
+  max-height: 180px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.18);
+  padding: 9px 10px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: "Cascadia Mono", "Consolas", monospace;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+:root[data-theme="light"] .debug-result-list,
+:root[data-theme="light"] .debug-warning {
+  background: rgba(15, 23, 42, 0.05);
+}
+
+.debug-warning {
+  color: var(--warning);
+}
+
+.debug-anchor-status {
+  color: var(--muted);
+  font-family: "Cascadia Mono", "Consolas", monospace;
+  font-size: 12px;
+}
+
+.debug-empty {
+  color: var(--muted);
+}
+
+.coordinate-labels {
+  display: grid;
+  gap: 10px;
+}
+
+.coordinate-label {
+  display: grid;
+  gap: 7px;
+}
+
+.coordinate-label > span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .script-heading,

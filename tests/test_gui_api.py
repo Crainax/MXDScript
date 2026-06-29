@@ -16,7 +16,7 @@ class GuiApiTests(unittest.TestCase):
         self.assertTrue(state["ok"])
         self.assertEqual(state["app"]["title"], "MXD脚本库")
         self.assertEqual(state["runtime"]["logDir"], str(appdata / "MXDScriptLibrary" / "logs"))
-        self.assertEqual(len(state["runtime"]["scripts"]), 2)
+        self.assertEqual(len(state["runtime"]["scripts"]), 4)
 
     def test_save_shortcuts_rejects_escape(self) -> None:
         with _temporary_local_appdata():
@@ -64,6 +64,22 @@ class GuiApiTests(unittest.TestCase):
         self.assertFalse(next_state["settings"]["scriptOptions"]["daily_script"]["aut7"])
         self.assertTrue(next_state["settings"]["scriptOptions"]["daily_script"]["otherDaily"])
         self.assertEqual(next_state["settings"]["scriptOptions"]["daily_script"]["matchThreshold"], 0.94)
+
+    def test_debug_script_options_persist_strings_and_zero_threshold(self) -> None:
+        with _temporary_local_appdata():
+            api = GuiApi()
+            response = api.save_script_options(
+                "image_recognition",
+                {"imagePath": r"D:\Project\MXDScript\assets\CombineMain\SchedulerUI.png", "matchThreshold": 0},
+            )
+            state = GuiApi().get_state()
+
+        self.assertTrue(response["ok"])
+        self.assertEqual(
+            state["settings"]["scriptOptions"]["image_recognition"]["imagePath"],
+            r"D:\Project\MXDScript\assets\CombineMain\SchedulerUI.png",
+        )
+        self.assertEqual(state["settings"]["scriptOptions"]["image_recognition"]["matchThreshold"], 0.0)
 
 class _temporary_local_appdata:
     def __init__(self) -> None:

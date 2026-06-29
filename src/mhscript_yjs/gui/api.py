@@ -282,8 +282,10 @@ def _coerce_script_option(default_value: Any, value: Any) -> Any:
         if not math.isfinite(number):
             return float(default_value)
         if 0.0 <= float(default_value) <= 1.0:
-            return max(0.5, min(1.0, number))
+            return max(0.0, min(1.0, number))
         return number
+    if isinstance(default_value, str):
+        return str(value)
     return value
 
 

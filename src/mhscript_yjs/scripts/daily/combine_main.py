@@ -23,7 +23,7 @@ from mhscript_yjs.scripts.daily.combine_main_source import SOURCE as COMBINE_MAI
 from mhscript_yjs.vision.matcher import TemplateMatcher
 from mhscript_yjs.vision.screenshot import MssScreenCapture
 from mhscript_yjs.vision.types import ImageGroup, MatchResult, Region
-from mhscript_yjs.windows.maple import WindowInfo, find_window
+from mhscript_yjs.windows.maple import WindowInfo, find_window, refresh_window_info
 
 
 DAILY_SCRIPT_ID = "daily_script"
@@ -76,6 +76,7 @@ class DailyRunner:
         self.match_threshold = float(self.options["matchThreshold"])
         self.control = control or NullRunControl()
         self.window_info = window_info
+        self._dynamic_window = window_info is None
         self.capture = capture
         self.vars: dict[str, Any] = {}
         self.subs = _parse_subs(COMBINE_MAIN_SOURCE)
@@ -141,7 +142,6 @@ class DailyRunner:
 
     def _initialize_window(self) -> None:
         window = self.window_info or find_window(self.config.maple_story.window_title)
-        self.window_info = window
         self.vars.update(
             {
                 "JobLynn": 1,
@@ -155,20 +155,9 @@ class DailyRunner:
                 "patrolTime": 0,
                 "questPointer": 0,
                 "mapOrder": 0,
-                "logoX": window.x,
-                "logoY": window.y,
-                "intX": window.width,
-                "intY": window.height,
-                "x1": window.x,
-                "y1": window.y,
-                "x2": window.x + 400,
-                "y2": window.y + 330,
-                "xEnd": window.right,
-                "yEnd": window.bottom,
-                "x3": window.right - 600,
-                "y3": window.bottom - 105,
             }
         )
+        self._set_window_bounds(window, initialize=True)
         log_important(
             self.logger,
             "[MapleStory] Window found at (%s, %s) Size: %sx%s",
@@ -451,6 +440,7 @@ class DailyRunner:
         args = _split_args(text)
         if len(args) < 10:
             raise RuntimeError(f"Invalid FindPic statement: {text}")
+        self._refresh_window_position()
         region = Region.from_bounds(
             round(float(self._eval_expr(args[0]))),
             round(float(self._eval_expr(args[1]))),
@@ -543,6 +533,49 @@ class DailyRunner:
         )
         return self.matcher.match_any(group, region)
 
+    def _set_window_bounds(self, window: WindowInfo, *, initialize: bool) -> None:
+        self.window_info = window
+        updates = {
+            "x1": window.x,
+            "y1": window.y,
+            "x2": window.x + 400,
+            "y2": window.y + 330,
+            "xEnd": window.right,
+            "yEnd": window.bottom,
+            "x3": window.right - 600,
+            "y3": window.bottom - 105,
+        }
+        if initialize:
+            updates.update(
+                {
+                    "logoX": window.x,
+                    "logoY": window.y,
+                    "intX": window.width,
+                    "intY": window.height,
+                }
+            )
+        self.vars.update(updates)
+
+    def _refresh_window_position(self) -> None:
+        if not self._dynamic_window:
+            return
+        previous = self.window_info
+        window = refresh_window_info(previous, self.config.maple_story.window_title)
+        if previous is None or (
+            previous.x,
+            previous.y,
+            previous.width,
+            previous.height,
+        ) != (window.x, window.y, window.width, window.height):
+            self.logger.info(
+                "[MapleStory] Window position refreshed: (%s,%s %sx%s)",
+                window.x,
+                window.y,
+                window.width,
+                window.height,
+            )
+        self._set_window_bounds(window, initialize=False)
+
     def _resolve_image_path(self, raw_path: str) -> Path:
         normalized = raw_path.strip().strip('"').replace("/", "\\")
         lower = normalized.lower()
@@ -567,6 +600,7 @@ class DailyRunner:
             sleeper=self.sleeper,
             logger=self.logger,
             position_sink=self._sync_character_position,
+            window_provider=self._current_window_info,
         )
         actions = CharacterActions(self.device, self.sleeper, self.logger)
         controller_kwargs = {
@@ -590,6 +624,12 @@ class DailyRunner:
         threshold: float,
     ) -> MatchResult | None:
         return self._match_paths(raw_paths, region, threshold, name=name)
+
+    def _current_window_info(self) -> WindowInfo:
+        self._refresh_window_position()
+        if self.window_info is None:
+            raise RuntimeError("MapleStory window info is not initialized.")
+        return self.window_info
 
     def _sync_character_position(self, position: CharacterPosition) -> None:
         self.vars["intX"] = position.x
@@ -724,16 +764,19 @@ class DailyRunner:
         return "done"
 
     def _ensure_scheduler_ui_open(self) -> None:
+        if self._scheduler_panel_visible():
+            log_important(self.logger, "[ReceiveQuest] SchedulerUI 已打开")
+            return
         for attempt in range(1, 9):
-            if self._match_scheduler_ui() is not None:
-                log_important(self.logger, "[ReceiveQuest] SchedulerUI 已打开")
-                return
             log_important(
                 self.logger,
                 "[ReceiveQuest] SchedulerUI 未打开，第 %s 次按 [ 打开",
                 attempt,
             )
-            self._press_scheduler_hotkey()
+            self._press_scheduler_hotkey(delay_ms=120)
+            if self._wait_for_scheduler_ui_visible():
+                log_important(self.logger, "[ReceiveQuest] SchedulerUI 已打开")
+                return
         raise RuntimeError("ReceiveQuest failed: SchedulerUI was not detected after pressing '['.")
 
     def _close_scheduler_ui(self) -> None:
@@ -769,6 +812,22 @@ class DailyRunner:
             self.sleeper.delay_ms(150)
         return False
 
+    def _wait_for_scheduler_ui_visible(self) -> bool:
+        visible_checks = 0
+        for check in range(1, 11):
+            if self._scheduler_panel_visible():
+                visible_checks += 1
+                self.logger.info(
+                    "[ReceiveQuest] SchedulerUI 打开确认第 %s 次：已检测到，连续 %s 次",
+                    check,
+                    visible_checks,
+                )
+                return True
+            visible_checks = 0
+            self.logger.info("[ReceiveQuest] SchedulerUI 打开确认第 %s 次：未检测到", check)
+            self.sleeper.delay_ms(150)
+        return False
+
     def _scheduler_panel_visible(self) -> bool:
         if self._match_scheduler_ui() is not None:
             return True
@@ -801,6 +860,7 @@ class DailyRunner:
         )
 
     def _scheduler_ui_region(self) -> Region:
+        self._refresh_window_position()
         window = self.window_info
         if window is None:
             return self._region("x1", "y1", "xEnd", "yEnd")
@@ -847,6 +907,7 @@ class DailyRunner:
         self._move_mouse_nearby(x, y)
 
     def _move_mouse_nearby(self, x: int, y: int) -> None:
+        self._refresh_window_position()
         window = self.window_info
         if window is None:
             self.device.move_relative(24, 24)
@@ -1033,6 +1094,7 @@ class DailyRunner:
         self.device.left_click(count)
 
     def _region(self, left: str, top: str, right: str, bottom: str) -> Region:
+        self._refresh_window_position()
         return Region.from_bounds(
             int(self.vars[left]),
             int(self.vars[top]),

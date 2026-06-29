@@ -13,6 +13,7 @@ from mhscript_yjs.windows.maple import WindowInfo
 
 ImageMatchFn = Callable[[str, tuple[str, ...], Region, float], MatchResult | None]
 PositionSink = Callable[["CharacterPosition"], None]
+WindowProvider = Callable[[], WindowInfo]
 
 
 @dataclass(frozen=True)
@@ -33,8 +34,10 @@ class PositionTracker:
     sleeper: Sleeper
     logger: Logger
     position_sink: PositionSink | None = None
+    window_provider: WindowProvider | None = None
 
     def locate(self, *, recover: bool = True) -> CharacterPosition | None:
+        self.refresh_window()
         me = self._match_me()
         if me is None and recover:
             self.logger.warning("[Position] 未检测到人物坐标，尝试左右微调后重试")
@@ -77,6 +80,7 @@ class PositionTracker:
         return position
 
     def minimap_region(self) -> Region:
+        self.refresh_window()
         return Region.from_bounds(
             self.window.x,
             self.window.y,
@@ -85,6 +89,7 @@ class PositionTracker:
         )
 
     def skill_region(self) -> Region:
+        self.refresh_window()
         return Region.from_bounds(
             self.window.right - 600,
             self.window.bottom - 105,
@@ -114,3 +119,7 @@ class PositionTracker:
             self.sleeper.delay_random_ms(200, 250)
         finally:
             self.device.key_up(keycode(direction))
+
+    def refresh_window(self) -> None:
+        if self.window_provider is not None:
+            self.window = self.window_provider()

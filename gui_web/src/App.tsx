@@ -50,6 +50,8 @@ import type {
 
 const MAX_LOG_LINES = 800;
 const DAILY_SCRIPT_ID = "daily_script";
+const IMAGE_RECOGNITION_SCRIPT_ID = "image_recognition";
+const COORDINATE_DETECTOR_SCRIPT_ID = "coordinate_detector";
 const DAILY_OPTION_ITEMS = [
   { key: "dailyQuest", label: "日常任务" },
   { key: "gugu", label: "菇菇神社" },
@@ -71,6 +73,7 @@ export function App() {
   const [dryRun, setDryRun] = useState(false);
   const [skipDelays, setSkipDelays] = useState(false);
   const [optionsLoaded, setOptionsLoaded] = useState(false);
+  const [scriptData, setScriptData] = useState<Record<string, Record<string, unknown>>>({});
   const logId = useRef(1);
 
   useEffect(() => {
@@ -183,6 +186,12 @@ export function App() {
     if (event.type === "error" && event.message) {
       setMessage(event.message);
     }
+    if (event.type === "data" && event.payload) {
+      setScriptData((current) => ({
+        ...current,
+        [event.scriptId]: event.payload ?? {},
+      }));
+    }
   }, [appendLog]);
 
   useEffect(() => {
@@ -201,10 +210,11 @@ export function App() {
   const runStart = useCallback(
     async (scriptId: string) => {
       try {
-        const nextRuntime = await startScript(scriptId, { dryRun, skipDelays });
-        applyRuntime(nextRuntime);
-        setSelectedScriptId(scriptId);
-        setMessage(null);
+          const nextRuntime = await startScript(scriptId, { dryRun, skipDelays });
+          applyRuntime(nextRuntime);
+          setSelectedScriptId(scriptId);
+          setScriptData((current) => ({ ...current, [scriptId]: {} }));
+          setMessage(null);
       } catch (error) {
         setMessage(error instanceof Error ? error.message : "启动脚本失败");
       }
@@ -382,6 +392,20 @@ export function App() {
             ) : null}
             {selectedScript?.id === DAILY_SCRIPT_ID ? (
               <DailyOptionsPanel options={selectedScriptOptions} onChange={updateSelectedScriptOption} />
+            ) : null}
+            {selectedScript?.id === IMAGE_RECOGNITION_SCRIPT_ID ? (
+              <ImageRecognitionOptionsPanel
+                options={selectedScriptOptions}
+                data={scriptData[selectedScript.id]}
+                onChange={updateSelectedScriptOption}
+              />
+            ) : null}
+            {selectedScript?.id === COORDINATE_DETECTOR_SCRIPT_ID ? (
+              <CoordinateDetectorOptionsPanel
+                options={selectedScriptOptions}
+                data={scriptData[selectedScript.id]}
+                onChange={updateSelectedScriptOption}
+              />
             ) : null}
             {message ? (
               <div className="notice">
@@ -603,6 +627,207 @@ function DailyOptionsPanel(props: {
   );
 }
 
+function ImageRecognitionOptionsPanel(props: {
+  options: Record<string, ScriptOptionValue>;
+  data?: Record<string, unknown>;
+  onChange: (key: string, value: ScriptOptionValue) => void;
+}) {
+  const imagePathValue = optionString(props.options.imagePath, "");
+  const thresholdValue = optionNumber(props.options.matchThreshold, 0.95);
+  const [imagePathText, setImagePathText] = useState(imagePathValue);
+  const [thresholdText, setThresholdText] = useState(formatThreshold(thresholdValue));
+
+  useEffect(() => {
+    setImagePathText(imagePathValue);
+  }, [imagePathValue]);
+
+  useEffect(() => {
+    setThresholdText(formatThreshold(thresholdValue));
+  }, [thresholdValue]);
+
+  const commitImagePath = useCallback(() => {
+    props.onChange("imagePath", imagePathText.trim());
+  }, [imagePathText, props]);
+
+  const commitThreshold = useCallback(() => {
+    const nextValue = Number(thresholdText);
+    if (!Number.isFinite(nextValue)) {
+      setThresholdText(formatThreshold(thresholdValue));
+      return;
+    }
+    const clampedValue = clampUnitThreshold(nextValue);
+    setThresholdText(formatThreshold(clampedValue));
+    props.onChange("matchThreshold", clampedValue);
+  }, [props, thresholdText, thresholdValue]);
+
+  return (
+    <section className="debug-options-panel">
+      <div className="panel-header">
+        <div>
+          <div className="category-label">脚本配置</div>
+          <h2>识别图片</h2>
+        </div>
+      </div>
+      <label className="debug-field">
+        <span>图片路径</span>
+        <input
+          type="text"
+          value={imagePathText}
+          onBlur={commitImagePath}
+          onChange={(event) => setImagePathText(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.currentTarget.blur();
+            }
+          }}
+        />
+      </label>
+      <label className="debug-field compact">
+        <span>容忍度</span>
+        <input
+          type="text"
+          inputMode="decimal"
+          value={thresholdText}
+          onBlur={commitThreshold}
+          onChange={(event) => setThresholdText(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.currentTarget.blur();
+            }
+          }}
+        />
+      </label>
+      <ImageRecognitionResult data={props.data} />
+    </section>
+  );
+}
+
+function CoordinateDetectorOptionsPanel(props: {
+  options: Record<string, ScriptOptionValue>;
+  data?: Record<string, unknown>;
+  onChange: (key: string, value: ScriptOptionValue) => void;
+}) {
+  const thresholdValue = optionNumber(props.options.matchThreshold, 0.95);
+  const [thresholdText, setThresholdText] = useState(formatThreshold(thresholdValue));
+
+  useEffect(() => {
+    setThresholdText(formatThreshold(thresholdValue));
+  }, [thresholdValue]);
+
+  const commitThreshold = useCallback(() => {
+    const nextValue = Number(thresholdText);
+    if (!Number.isFinite(nextValue)) {
+      setThresholdText(formatThreshold(thresholdValue));
+      return;
+    }
+    const clampedValue = clampUnitThreshold(nextValue);
+    setThresholdText(formatThreshold(clampedValue));
+    props.onChange("matchThreshold", clampedValue);
+  }, [props, thresholdText, thresholdValue]);
+
+  return (
+    <section className="debug-options-panel">
+      <div className="panel-header">
+        <div>
+          <div className="category-label">脚本配置</div>
+          <h2>检测坐标</h2>
+        </div>
+      </div>
+      <label className="debug-field compact">
+        <span>容忍度</span>
+        <input
+          type="text"
+          inputMode="decimal"
+          value={thresholdText}
+          onBlur={commitThreshold}
+          onChange={(event) => setThresholdText(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.currentTarget.blur();
+            }
+          }}
+        />
+      </label>
+      <CoordinateDetectorResult data={props.data} />
+    </section>
+  );
+}
+
+function ImageRecognitionResult({ data }: { data?: Record<string, unknown> }) {
+  const matches = payloadArray(data, "matches");
+  const message = payloadString(data, "message", "等待运行...");
+  const updatedAt = payloadString(data, "updatedAt", "");
+  return (
+    <div className="debug-result">
+      <div className="debug-result-title">
+        <span>{message}</span>
+        {updatedAt ? <span>{updatedAt}</span> : null}
+      </div>
+      <div className="debug-result-list">
+        {matches.length === 0 ? (
+          <div className="debug-empty">暂无坐标</div>
+        ) : (
+          matches.map((match, index) => <div key={`${index}-${payloadNumber(match, "x")}`}>{formatMatchLine(match, index)}</div>)
+        )}
+      </div>
+    </div>
+  );
+}
+
+function CoordinateDetectorResult({ data }: { data?: Record<string, unknown> }) {
+  const people = payloadArray(data, "people");
+  const teleports = payloadArray(data, "teleports");
+  const runes = payloadArray(data, "runes");
+  const missingImages = payloadUnknownArray(data, "missingImages");
+  const message = payloadString(data, "message", "等待运行...");
+  const anchorStatus = payloadString(data, "anchorStatus", "");
+  const updatedAt = payloadString(data, "updatedAt", "");
+  return (
+    <div className="debug-result">
+      <div className="debug-result-title">
+        <span>{message}</span>
+        {updatedAt ? <span>{updatedAt}</span> : null}
+      </div>
+      {missingImages.length > 0 ? (
+        <div className="debug-warning">{missingImages.map(String).join("\n")}</div>
+      ) : null}
+      {anchorStatus ? <div className="debug-anchor-status">MapAnchor: {anchorStatus}</div> : null}
+      <div className="coordinate-labels">
+        <div className="coordinate-label">
+          <span>人物坐标</span>
+          <div className="debug-result-list">
+            {people.length === 0 ? (
+              <div className="debug-empty">未识别</div>
+            ) : (
+              people.map((match, index) => <div key={`${index}-${payloadNumber(match, "relativeX")}`}>{formatRelativeLine(match, index)}</div>)
+            )}
+          </div>
+        </div>
+        <div className="coordinate-label">
+          <span>传送门坐标</span>
+          <div className="debug-result-list">
+            {teleports.length === 0 ? (
+              <div className="debug-empty">未识别</div>
+            ) : (
+              teleports.map((match, index) => <div key={`${index}-${payloadNumber(match, "relativeX")}`}>{formatRelativeLine(match, index)}</div>)
+            )}
+          </div>
+        </div>
+        <div className="coordinate-label">
+          <span>轮坐标</span>
+          <div className="debug-result-list">
+            {runes.length === 0 ? (
+              <div className="debug-empty">未识别</div>
+            ) : (
+              runes.map((match, index) => <div key={`${index}-${payloadNumber(match, "relativeX")}`}>{formatRelativeLine(match, index)}</div>)
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function LogPanel(props: {
   logs: LogLine[];
   selectedScript: ScriptItem | null;
@@ -778,12 +1003,70 @@ function optionNumber(value: ScriptOptionValue | undefined, fallback: number): n
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
 
+function optionString(value: ScriptOptionValue | undefined, fallback: string): string {
+  return typeof value === "string" ? value : fallback;
+}
+
 function clampMatchThreshold(value: number): number {
   return Math.min(1, Math.max(0.5, value));
 }
 
+function clampUnitThreshold(value: number): number {
+  return Math.min(1, Math.max(0, value));
+}
+
 function formatThreshold(value: number): string {
   return String(Number(value.toFixed(3)));
+}
+
+function payloadString(payload: Record<string, unknown> | undefined, key: string, fallback: string): string {
+  const value = payload?.[key];
+  return typeof value === "string" ? value : fallback;
+}
+
+function payloadNumber(payload: Record<string, unknown>, key: string): number | null {
+  const value = payload[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function payloadArray(payload: Record<string, unknown> | undefined, key: string): Array<Record<string, unknown>> {
+  const value = payload?.[key];
+  return Array.isArray(value) ? value.filter(isRecord) : [];
+}
+
+function payloadUnknownArray(payload: Record<string, unknown> | undefined, key: string): unknown[] {
+  const value = payload?.[key];
+  return Array.isArray(value) ? value : [];
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function formatMatchLine(match: Record<string, unknown>, index: number): string {
+  const x = payloadNumber(match, "x");
+  const y = payloadNumber(match, "y");
+  const centerX = payloadNumber(match, "centerX");
+  const centerY = payloadNumber(match, "centerY");
+  const score = payloadNumber(match, "score");
+  return `${index + 1}. 坐标 (${formatMaybeNumber(x)}, ${formatMaybeNumber(y)}) · 中心 (${formatMaybeNumber(centerX)}, ${formatMaybeNumber(centerY)}) · 分数 ${formatScore(score)}`;
+}
+
+function formatRelativeLine(match: Record<string, unknown>, index: number): string {
+  const relativeX = payloadNumber(match, "relativeX");
+  const relativeY = payloadNumber(match, "relativeY");
+  const x = payloadNumber(match, "x");
+  const y = payloadNumber(match, "y");
+  const score = payloadNumber(match, "score");
+  return `${index + 1}. 坐标 (${formatMaybeNumber(relativeX)}, ${formatMaybeNumber(relativeY)}) · 屏幕 (${formatMaybeNumber(x)}, ${formatMaybeNumber(y)}) · 分数 ${formatScore(score)}`;
+}
+
+function formatMaybeNumber(value: number | null): string {
+  return value === null ? "-" : String(value);
+}
+
+function formatScore(value: number | null): string {
+  return value === null ? "-" : value.toFixed(3);
 }
 
 function readStoredTheme(fallback: ThemePreference): ThemePreference {

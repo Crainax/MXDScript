@@ -1,5 +1,5 @@
 export type ScriptStatus = "idle" | "running" | "paused" | "stopping" | "finished" | "error";
-export type ScriptOptionValue = boolean | number;
+export type ScriptOptionValue = boolean | number | string;
 
 export interface ScriptItem {
   id: string;
@@ -44,13 +44,14 @@ export interface AppState {
 }
 
 export interface RuntimeEvent {
-  type: "log" | "state" | "finished" | "error";
+  type: "log" | "state" | "finished" | "error" | "data";
   scriptId: string;
   state?: ScriptStatus;
   level?: string;
   message?: string;
   logPath?: string;
   result?: Record<string, unknown>;
+  payload?: Record<string, unknown>;
 }
 
 export interface LogLine {

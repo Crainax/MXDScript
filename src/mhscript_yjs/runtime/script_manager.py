@@ -230,6 +230,7 @@ class ScriptManager:
                 dry_run=dry_run,
                 skip_delays=skip_delays,
                 script_options=script_options,
+                emit_data=lambda payload: self._emit_data(script_id, payload),
             )
             result = definition.runner(context)
             payload = {
@@ -301,6 +302,9 @@ class ScriptManager:
 
     def _emit_state(self, script_id: str, state: str) -> None:
         self._events.put({"type": "state", "scriptId": script_id, "state": state})
+
+    def _emit_data(self, script_id: str, payload: Any) -> None:
+        self._events.put({"type": "data", "scriptId": script_id, "payload": dict(payload)})
 
     def _require_definition(self, script_id: str) -> ScriptDefinition:
         try:

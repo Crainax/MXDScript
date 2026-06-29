@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from logging import Logger
 from pathlib import Path
@@ -76,6 +77,95 @@ class TemplateMatcher:
                 )
         return accepted
 
+    def match_all(
+        self,
+        group: ImageGroup,
+        region: Region,
+        *,
+        limit: int = 200,
+    ) -> list[MatchResult]:
+        start = time.perf_counter()
+        haystack = self.capture.capture_region(region)
+        return self.match_all_in(haystack, group, region, limit=limit, start=start)
+
+    def match_all_in(
+        self,
+        haystack: object,
+        group: ImageGroup,
+        region: Region,
+        *,
+        limit: int = 200,
+        start: float | None = None,
+    ) -> list[MatchResult]:
+        start = time.perf_counter() if start is None else start
+        matches: list[MatchResult] = []
+        best: MatchResult | None = None
+
+        for image_path in group.paths:
+            template, mask = self._load_template(image_path)
+            image_matches, image_best = self._match_many_with_best(
+                haystack=haystack,
+                template=template,
+                mask=mask,
+                region=region,
+                group=group.name,
+                image_path=image_path,
+                threshold=group.threshold,
+            )
+            matches.extend(image_matches)
+            if image_best is not None and (best is None or image_best.score > best.score):
+                best = image_best
+
+        matches.sort(key=lambda item: (-item.score, item.y, item.x, str(item.image_path)))
+        if limit > 0:
+            matches = matches[:limit]
+
+        if self.logger:
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            if best is not None:
+                self.logger.debug(
+                    "findpic_all group=%s count=%s best=%s x=%s y=%s best_score=%.9f threshold=%.6f elapsed_ms=%.2f",
+                    group.name,
+                    len(matches),
+                    best.image_path,
+                    best.x,
+                    best.y,
+                    best.score,
+                    group.threshold,
+                    elapsed_ms,
+                )
+            else:
+                self.logger.debug(
+                    "findpic_all group=%s count=%s no_match threshold=%.6f elapsed_ms=%.2f",
+                    group.name,
+                    len(matches),
+                    group.threshold,
+                    elapsed_ms,
+                )
+        return matches
+
+    def match_groups(
+        self,
+        groups: Iterable[ImageGroup],
+        region: Region,
+        *,
+        limit: int = 200,
+    ) -> dict[str, list[MatchResult]]:
+        start = time.perf_counter()
+        haystack = self.capture.capture_region(region)
+        results = {
+            group.name: self.match_all_in(haystack, group, region, limit=limit)
+            for group in groups
+        }
+        if self.logger:
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            self.logger.debug(
+                "findpic_groups groups=%s elapsed_ms=%.2f",
+                ",".join(results.keys()),
+                elapsed_ms,
+            )
+        return results
+
     def _load_template(self, image_path: Path) -> tuple[object, object | None]:
         image_path = image_path.resolve()
         if image_path in self._cache:
@@ -102,18 +192,6 @@ class TemplateMatcher:
                 mask = (alpha > 0).astype(np.uint8) * 255
         else:
             template = raw_template[:, :, :3]
-
-        corners = (
-            template[0, 0],
-            template[0, -1],
-            template[-1, 0],
-            template[-1, -1],
-        )
-        if mask is None and all(np.array_equal(corners[0], corner) for corner in corners[1:]):
-            transparent = corners[0]
-            mask = np.any(template != transparent, axis=2).astype(np.uint8) * 255
-            if not np.any(mask):
-                mask = None
 
         self._cache[image_path] = (template, mask)
         return template, mask
@@ -163,3 +241,92 @@ class TemplateMatcher:
             height=int(template_height),
             score=score,
         )
+
+    def _match_many(
+        self,
+        *,
+        haystack: object,
+        template: object,
+        mask: object | None,
+        region: Region,
+        group: str,
+        image_path: Path,
+        threshold: float,
+    ) -> list[MatchResult]:
+        matches, _ = self._match_many_with_best(
+            haystack=haystack,
+            template=template,
+            mask=mask,
+            region=region,
+            group=group,
+            image_path=image_path,
+            threshold=threshold,
+        )
+        return matches
+
+    def _match_many_with_best(
+        self,
+        *,
+        haystack: object,
+        template: object,
+        mask: object | None,
+        region: Region,
+        group: str,
+        image_path: Path,
+        threshold: float,
+    ) -> tuple[list[MatchResult], MatchResult | None]:
+        import cv2
+        import numpy as np
+
+        template_height, template_width = template.shape[:2]
+        haystack_height, haystack_width = haystack.shape[:2]
+        if template_width > haystack_width or template_height > haystack_height:
+            if self.logger:
+                self.logger.warning(
+                    "template_larger_than_region group=%s image=%s template=%sx%s region=%sx%s",
+                    group,
+                    image_path,
+                    template_width,
+                    template_height,
+                    haystack_width,
+                    haystack_height,
+                )
+            return [], None
+
+        if mask is not None:
+            matched = cv2.matchTemplate(haystack, template, cv2.TM_SQDIFF_NORMED, mask=mask)
+        else:
+            matched = cv2.matchTemplate(haystack, template, cv2.TM_SQDIFF_NORMED)
+        matched = np.nan_to_num(matched, nan=1.0, posinf=1.0, neginf=1.0)
+        min_value, _, min_location, _ = cv2.minMaxLoc(matched)
+        best = MatchResult(
+            group=group,
+            image_path=image_path,
+            x=region.x + int(min_location[0]),
+            y=region.y + int(min_location[1]),
+            width=int(template_width),
+            height=int(template_height),
+            score=1.0 - float(min_value),
+        )
+
+        accepted = (matched <= (1.0 - threshold + 1e-9)).astype(np.uint8)
+        if not np.any(accepted):
+            return [], best
+
+        count, labels = cv2.connectedComponents(accepted, connectivity=8)
+        results: list[MatchResult] = []
+        for label in range(1, count):
+            component_mask = (labels == label).astype(np.uint8)
+            min_value, _, min_location, _ = cv2.minMaxLoc(matched, mask=component_mask)
+            results.append(
+                MatchResult(
+                    group=group,
+                    image_path=image_path,
+                    x=region.x + int(min_location[0]),
+                    y=region.y + int(min_location[1]),
+                    width=int(template_width),
+                    height=int(template_height),
+                    score=1.0 - float(min_value),
+                )
+            )
+        return results, best

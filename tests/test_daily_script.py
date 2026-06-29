@@ -59,6 +59,53 @@ class SequenceMatcher:
         )
 
 
+@dataclass
+class CharacterCoordinateMatcher:
+    positions: list[tuple[int, int]]
+    anchor: tuple[int, int] = (40, 1757)
+    calls: list[str] = field(default_factory=list)
+
+    def match_any(self, group: ImageGroup, region: Region) -> MatchResult | None:
+        self.calls.append(group.name)
+        if group.name == "Character.MapAnchor":
+            x, y = self.anchor
+        elif group.name == "Character.Me":
+            if not self.positions:
+                return None
+            x, y = self.positions.pop(0) if len(self.positions) > 1 else self.positions[0]
+        else:
+            return None
+        return MatchResult(
+            group=group.name,
+            image_path=group.paths[0],
+            x=x,
+            y=y,
+            width=20,
+            height=10,
+            score=1.0,
+        )
+
+
+@dataclass
+class LynnSkillMatcher:
+    available: set[str]
+    calls: list[str] = field(default_factory=list)
+
+    def match_any(self, group: ImageGroup, region: Region) -> MatchResult | None:
+        self.calls.append(group.name)
+        if group.name not in self.available:
+            return None
+        return MatchResult(
+            group=group.name,
+            image_path=group.paths[0],
+            x=100,
+            y=200,
+            width=20,
+            height=10,
+            score=1.0,
+        )
+
+
 class DailyScriptTests(unittest.TestCase):
     def test_initializes_job_even_when_all_modules_are_disabled(self) -> None:
         device = DryRunDevice()
@@ -253,6 +300,153 @@ class DailyScriptTests(unittest.TestCase):
         self.assertGreater(runner.vars["a"], 0)
         self.assertEqual(runner.vars["b"], 0)
         self.assertEqual([action.name for action in device.actions], ["release_all_keys"])
+
+    def test_lynn_move_subroutine_uses_refactored_character_controller(self) -> None:
+        device = DryRunDevice()
+        runner = DailyRunner(
+            config=load_config(load_local=False),
+            device=device,
+            matcher=CharacterCoordinateMatcher(
+                positions=[
+                    (71, 1837),
+                    (71, 1837),
+                    (71, 1837),
+                    (71, 1837),
+                    (71, 1837),
+                    (71, 1837),
+                    (71, 1837),
+                    (71, 1837),
+                    (71, 1837),
+                    (71, 1862),
+                ]
+            ),  # type: ignore[arg-type]
+            sleeper=NullSleeper(),
+            logger=logging.getLogger("test.daily_script"),
+            window_info=WindowInfo(hwnd=100, title="MapleStory", x=30, y=1721, width=1366, height=768),
+        )
+        runner._initialize_window()  # noqa: SLF001
+        runner.vars.update(
+            {
+                "CurrentJob": runner.vars["JobLynn"],
+                "JumpRange": 24,
+                "tarX": 31,
+                "tarY": 105,
+                "tolerance": 2,
+                "yTolerance": 1,
+            }
+        )
+
+        runner.execute_sub("Move")
+
+        actions = [(action.name, action.args) for action in device.actions]
+        self.assertIn(("key_down", (0x28,)), actions)
+        self.assertIn(("key_down", (32,)), actions)
+        self.assertIn(("key_up", (32,)), actions)
+        self.assertIn(("key_up", (0x28,)), actions)
+        self.assertEqual(runner.vars["intX"], 31)
+        self.assertEqual(runner.vars["intY"], 105)
+
+    def test_lynn_stand_spell_uses_refactored_skill_logic(self) -> None:
+        device = DryRunDevice()
+        runner = DailyRunner(
+            config=load_config(load_local=False),
+            device=device,
+            matcher=LynnSkillMatcher({"Lynn.D"}),  # type: ignore[arg-type]
+            sleeper=NullSleeper(),
+            logger=logging.getLogger("test.daily_script"),
+            window_info=WindowInfo(hwnd=100, title="MapleStory", x=30, y=1721, width=1366, height=768),
+        )
+        runner._initialize_window()  # noqa: SLF001
+        runner.vars.update(
+            {
+                "CurrentJob": runner.vars["JobLynn"],
+                "JumpRange": 24,
+            }
+        )
+
+        runner.execute_sub("StandSpell")
+
+        self.assertEqual(
+            [(action.name, action.args) for action in device.actions],
+            [
+                ("press_key", (0x27, 1)),
+                ("key_down", (ord("D"),)),
+                ("key_up", (ord("D"),)),
+            ],
+        )
+
+    def test_lara_move_subroutine_uses_refactored_character_controller(self) -> None:
+        device = DryRunDevice()
+        runner = DailyRunner(
+            config=load_config(load_local=False),
+            device=device,
+            matcher=CharacterCoordinateMatcher(
+                positions=[
+                    (71, 1837),
+                    (71, 1837),
+                    (71, 1837),
+                    (71, 1837),
+                    (71, 1837),
+                    (71, 1837),
+                    (71, 1837),
+                    (71, 1837),
+                    (71, 1837),
+                    (71, 1862),
+                ]
+            ),  # type: ignore[arg-type]
+            sleeper=NullSleeper(),
+            logger=logging.getLogger("test.daily_script"),
+            window_info=WindowInfo(hwnd=100, title="MapleStory", x=30, y=1721, width=1366, height=768),
+        )
+        runner._initialize_window()  # noqa: SLF001
+        runner.vars.update(
+            {
+                "CurrentJob": runner.vars["JobLara"],
+                "JumpRange": 24,
+                "tarX": 31,
+                "tarY": 105,
+                "tolerance": 2,
+                "yTolerance": 1,
+            }
+        )
+
+        runner.execute_sub("Move")
+
+        actions = [(action.name, action.args) for action in device.actions]
+        self.assertIn(("key_down", (0x28,)), actions)
+        self.assertIn(("key_down", (32,)), actions)
+        self.assertIn(("key_up", (32,)), actions)
+        self.assertIn(("key_up", (0x28,)), actions)
+        self.assertEqual(runner.vars["intX"], 31)
+        self.assertEqual(runner.vars["intY"], 105)
+
+    def test_lara_stand_spell_uses_refactored_skill_logic(self) -> None:
+        device = DryRunDevice()
+        runner = DailyRunner(
+            config=load_config(load_local=False),
+            device=device,
+            matcher=LynnSkillMatcher({"Common.4"}),  # type: ignore[arg-type]
+            sleeper=NullSleeper(),
+            logger=logging.getLogger("test.daily_script"),
+            window_info=WindowInfo(hwnd=100, title="MapleStory", x=30, y=1721, width=1366, height=768),
+        )
+        runner._initialize_window()  # noqa: SLF001
+        runner.vars.update(
+            {
+                "CurrentJob": runner.vars["JobLara"],
+                "JumpRange": 24,
+            }
+        )
+
+        runner.execute_sub("StandSpell")
+
+        self.assertEqual(
+            [(action.name, action.args) for action in device.actions],
+            [
+                ("key_down", (ord("4"),)),
+                ("key_up", (ord("4"),)),
+            ],
+        )
 
 
 if __name__ == "__main__":

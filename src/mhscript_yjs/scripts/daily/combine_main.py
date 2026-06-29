@@ -8,6 +8,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from mhscript_yjs.characters import CharacterPosition, Job, LaraController, LynnController, MoveTarget, PositionTracker
+from mhscript_yjs.characters.actions import CharacterActions
+from mhscript_yjs.characters.controller import CharacterController
 from mhscript_yjs.core.config import ProjectConfig
 from mhscript_yjs.drivers.base import InputDevice
 from mhscript_yjs.drivers.dry_run import DryRunDevice
@@ -79,6 +82,7 @@ class DailyRunner:
         self.steps = 0
         self.modules: dict[str, str] = {}
         self._branch_eval_entries: set[int] = set()
+        self._character_controller: CharacterController | None = None
 
     def run(self) -> DailyScriptResult:
         try:
@@ -206,6 +210,7 @@ class DailyRunner:
 
         if self.vars["CurrentJob"] == self.vars["JobLynn"]:
             self.vars.update({"SpellOK": 0, "fireTime": 0, "WGTime": 0, "JumpRange": 24})
+            self._character_controller = self._create_character_controller(Job.LYNN)
             log_important(self.logger, "[Lynn] Lynn job initialized")
         else:
             self.vars.update(
@@ -216,6 +221,7 @@ class DailyRunner:
                     "JumpRange": 24,
                 }
             )
+            self._character_controller = self._create_character_controller(Job.LARA)
             log_important(self.logger, "[Lara] Lara job initialized")
         log_important(
             self.logger,
@@ -236,6 +242,14 @@ class DailyRunner:
             return
         if lowered in {"initializejob", "detectjob"}:
             self._initialize_job()
+            return
+        if lowered == "getxy" and self._run_character_getxy():
+            return
+        if lowered == "move" and self._run_character_move():
+            return
+        if lowered in {"standspell", "lynnstandspell", "larastandspell"} and self._run_character_stand_spell():
+            return
+        if lowered == "beforestart" and self._run_character_before_start():
             return
         try:
             lines = self.subs[lowered]
@@ -542,6 +556,114 @@ class DailyRunner:
         if direct.exists():
             return direct
         return self.config.maple_story.image_root / normalized
+
+    def _create_character_controller(self, job: Job) -> CharacterController | None:
+        if self.window_info is None:
+            raise RuntimeError("Character controller requires initialized window info.")
+        tracker = PositionTracker(
+            window=self.window_info,
+            match_image=self._match_character_image,
+            device=self.device,
+            sleeper=self.sleeper,
+            logger=self.logger,
+            position_sink=self._sync_character_position,
+        )
+        actions = CharacterActions(self.device, self.sleeper, self.logger)
+        controller_kwargs = {
+            "tracker": tracker,
+            "actions": actions,
+            "match_image": self._match_character_image,
+            "logger": self.logger,
+            "jump_range": int(self.vars.get("JumpRange", 24)),
+        }
+        if job == Job.LYNN:
+            return LynnController(**controller_kwargs)
+        if job == Job.LARA:
+            return LaraController(**controller_kwargs)
+        return None
+
+    def _match_character_image(
+        self,
+        name: str,
+        raw_paths: tuple[str, ...],
+        region: Region,
+        threshold: float,
+    ) -> MatchResult | None:
+        return self._match_paths(raw_paths, region, threshold, name=name)
+
+    def _sync_character_position(self, position: CharacterPosition) -> None:
+        self.vars["intX"] = position.x
+        self.vars["intY"] = position.y
+        self.vars["logoX"] = position.anchor_screen_x
+        self.vars["logoY"] = position.anchor_screen_y
+
+    def _active_character_controller(self) -> CharacterController | None:
+        job = self._active_job()
+        if job is None:
+            return None
+        if self._character_controller is None:
+            self._character_controller = self._create_character_controller(job)
+        return self._character_controller
+
+    def _active_job(self) -> Job | None:
+        if self.vars.get("CurrentJob") == self.vars.get("JobLynn"):
+            return Job.LYNN
+        if self.vars.get("CurrentJob") == self.vars.get("JobLara"):
+            return Job.LARA
+        return None
+
+    def _run_character_getxy(self) -> bool:
+        controller = self._active_character_controller()
+        if controller is None:
+            return False
+        position = controller.locate(recover=True)
+        if position is None:
+            self.vars["intX"] = -1
+            self.vars["intY"] = -1
+        return True
+
+    def _run_character_move(self) -> bool:
+        controller = self._active_character_controller()
+        if controller is None:
+            return False
+        target = MoveTarget(
+            x=int(self.vars.get("tarX", 0)),
+            y=int(self.vars.get("tarY", 0)),
+            x_tolerance=int(self.vars.get("tolerance", 2)),
+            y_tolerance=int(self.vars.get("yTolerance", 0)),
+        )
+        result = controller.move_to(target)
+        if result.last_position is not None:
+            self._sync_character_position(result.last_position)
+        if not result.reached:
+            self.logger.warning(
+                "[Move] 移动到 (%s,%s) 未完成：%s",
+                target.x,
+                target.y,
+                result.reason,
+            )
+        return True
+
+    def _run_character_stand_spell(self) -> bool:
+        controller = self._active_character_controller()
+        if controller is None:
+            return False
+        controller.stand_attack()
+        return True
+
+    def _run_character_before_start(self) -> bool:
+        controller = self._active_character_controller()
+        if controller is None:
+            return False
+        self.vars["startTime"] = self._get_timestamp()
+        self.execute_sub("Wheel")
+        self.vars["fountains"] = 1
+        self.vars["yTolerance"] = 0
+        self.vars["fireTime"] = 0
+        self.vars["cycle1"] = 0
+        controller.reset_map_state()
+        self.logger.info("[Character] BeforeStart reset complete for Lynn")
+        return True
 
     def _run_clear_quest(self) -> None:
         log_important(self.logger, "[Quest] Starting ClearQuest with AUT options")

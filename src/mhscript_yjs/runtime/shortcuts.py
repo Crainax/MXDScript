@@ -77,6 +77,9 @@ def normalize_shortcut_map(script_ids: Iterable[str], shortcuts: dict[str, str])
     for script_id, shortcut in shortcuts.items():
         if script_id not in allowed:
             continue
+        if not shortcut.strip():
+            normalized[script_id] = ""
+            continue
         normalized_shortcut = normalize_shortcut(shortcut)
         owner = used.get(normalized_shortcut)
         if owner is not None:

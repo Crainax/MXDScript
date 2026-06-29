@@ -1,4 +1,4 @@
-import type { AppSettings, AppState, RuntimeEvent, RuntimeState } from "./types";
+import type { AppSettings, AppState, RuntimeEvent, RuntimeState, ScriptOptionValue } from "./types";
 
 interface ApiResponse {
   ok: boolean;
@@ -76,6 +76,20 @@ export async function saveRunOptions(options: { dryRun: boolean; skipDelays: boo
   return response.settings;
 }
 
+export async function saveScriptOptions(
+  scriptId: string,
+  options: Record<string, ScriptOptionValue>,
+): Promise<AppSettings> {
+  const response = await requestJson("/script-options", {
+    method: "POST",
+    body: JSON.stringify({ scriptId, options }),
+  });
+  if (!response.ok || !response.settings) {
+    throw new Error(response.error ?? "保存脚本配置失败");
+  }
+  return response.settings;
+}
+
 export async function openLogDir(): Promise<void> {
   const response = await requestJson("/open-log-dir", { method: "POST" });
   if (!response.ok) {
@@ -123,6 +137,10 @@ function normalizeRuntime(runtime: RuntimeState): RuntimeState {
       ...script,
       defaultShortcut:
         script.defaultShortcut ?? (script as unknown as { default_shortcut?: string }).default_shortcut ?? "",
+      defaultOptions:
+        script.defaultOptions ??
+        (script as unknown as { default_options?: Record<string, ScriptOptionValue> }).default_options ??
+        {},
       requiresMousePrecision:
         script.requiresMousePrecision ??
         (script as unknown as { requires_mouse_precision?: boolean }).requires_mouse_precision ??

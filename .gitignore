@@ -16,9 +16,12 @@ work/
 outputs/
 screenshots/
 captures/
+assets/
 build/
 dist/
 *.spec
+.mxd_http_pid
+.mxd_http_url
 gui_web/node_modules/
 gui_web/dist/
 

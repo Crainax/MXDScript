@@ -47,7 +47,7 @@ class TemplateMatcher:
         if self.logger:
             if accepted:
                 self.logger.debug(
-                    "findpic group=%s accepted=%s x=%s y=%s score=%.6f threshold=%.6f elapsed_ms=%.2f",
+                    "findpic group=%s accepted=%s x=%s y=%s score=%.9f threshold=%.6f elapsed_ms=%.2f",
                     group.name,
                     accepted.image_path,
                     accepted.x,
@@ -58,7 +58,7 @@ class TemplateMatcher:
                 )
             elif best:
                 self.logger.debug(
-                    "findpic group=%s below_threshold=%s x=%s y=%s score=%.6f threshold=%.6f elapsed_ms=%.2f",
+                    "findpic group=%s below_threshold=%s x=%s y=%s score=%.9f threshold=%.6f elapsed_ms=%.2f",
                     group.name,
                     best.image_path,
                     best.x,

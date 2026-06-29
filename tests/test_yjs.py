@@ -13,6 +13,11 @@ class YjsDeviceTests(unittest.TestCase):
         with self.assertRaisesRegex(YjsDeviceNotFoundError, "未发现硬件"):
             device._check("M_MoveTo3", -1)  # noqa: SLF001
 
+    def test_auto_relative_move_uses_same_machine_api(self) -> None:
+        device = YjsDevice(load_config(load_local=False).yjs)
+
+        self.assertEqual(device._choose_relative_move_api(), "M_MoveR2")  # noqa: SLF001
+
 
 if __name__ == "__main__":
     unittest.main()

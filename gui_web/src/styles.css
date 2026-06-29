@@ -104,6 +104,7 @@ button {
 
 .brand-panel,
 .control-surface,
+.daily-options-panel,
 .log-panel,
 .notice {
   border: 1px solid var(--border);
@@ -347,6 +348,61 @@ h2 {
 
 .control-surface {
   padding: 18px;
+}
+
+.daily-options-panel {
+  padding: 16px;
+}
+
+.daily-option-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.daily-option {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--button);
+  padding: 10px 12px;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.daily-option input {
+  accent-color: var(--primary-strong);
+}
+
+.daily-threshold {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 118px;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--button);
+  padding: 10px 12px;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.daily-threshold input {
+  width: 100%;
+  height: 32px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.18);
+  color: var(--text);
+  padding: 0 10px;
+  text-align: right;
+}
+
+:root[data-theme="light"] .daily-threshold input {
+  background: rgba(255, 255, 255, 0.7);
 }
 
 .script-heading,

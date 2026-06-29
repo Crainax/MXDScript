@@ -90,6 +90,7 @@ class ScriptManager:
         *,
         dry_run: bool = False,
         skip_delays: bool = False,
+        script_options: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         definition = self._require_definition(script_id)
         with self._lock:
@@ -104,7 +105,7 @@ class ScriptManager:
 
             worker = threading.Thread(
                 target=self._run_script,
-                args=(definition, controller, dry_run, skip_delays),
+                args=(definition, controller, dry_run, skip_delays, script_options or {}),
                 name=f"mxdscript-{script_id}",
                 daemon=True,
             )
@@ -173,6 +174,7 @@ class ScriptManager:
         controller: PauseController,
         dry_run: bool,
         skip_delays: bool,
+        script_options: dict[str, Any],
     ) -> None:
         script_id = definition.id
         logger: logging.Logger | None = None
@@ -227,6 +229,7 @@ class ScriptManager:
                 control=controller,
                 dry_run=dry_run,
                 skip_delays=skip_delays,
+                script_options=script_options,
             )
             result = definition.runner(context)
             payload = {
@@ -288,6 +291,7 @@ class ScriptManager:
             "defaultShortcut": definition.default_shortcut,
             "placeholder": definition.placeholder,
             "requiresMousePrecision": definition.requires_mouse_precision,
+            "defaultOptions": dict(definition.default_options),
             "status": self._states[definition.id],
             "logPath": str(self._log_paths[definition.id])
             if definition.id in self._log_paths

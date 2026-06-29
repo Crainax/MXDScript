@@ -7,8 +7,11 @@ from typing import Any
 
 from mhscript_yjs.core.config import ProjectConfig
 from mhscript_yjs.runtime.control import RunControl
-from mhscript_yjs.runtime.timing import NullSleeper, Sleeper
-from mhscript_yjs.scripts.placeholders import run_placeholder_script
+from mhscript_yjs.scripts.daily.combine_main import (
+    DAILY_SCRIPT_ID,
+    DEFAULT_DAILY_OPTIONS,
+    create_runner as create_daily_runner,
+)
 from mhscript_yjs.scripts.tool.open_package import create_runner
 
 
@@ -19,6 +22,7 @@ class ScriptRunContext:
     control: RunControl
     dry_run: bool
     skip_delays: bool
+    script_options: Mapping[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -42,10 +46,13 @@ class ScriptDefinition:
     runner: ScriptRunner
     placeholder: bool = False
     requires_mouse_precision: bool = True
+    default_options: Mapping[str, Any] = field(default_factory=dict)
 
 
 def get_script_definitions() -> tuple[ScriptDefinition, ...]:
-    return (
+    return tuple(
+        definition
+        for definition in (
         ScriptDefinition(
             id="open_package",
             name="自动开包",
@@ -56,6 +63,18 @@ def get_script_definitions() -> tuple[ScriptDefinition, ...]:
             runner=_run_open_package,
             placeholder=False,
             requires_mouse_precision=True,
+        ),
+        ScriptDefinition(
+            id=DAILY_SCRIPT_ID,
+            name="日常脚本",
+            category="日常",
+            description="按模块执行每日任务、菇菇神社、活动签到和其他每日。",
+            module="mhscript_yjs.scripts.daily.combine_main",
+            default_shortcut="Ctrl+F9",
+            runner=_run_daily_script,
+            placeholder=False,
+            requires_mouse_precision=True,
+            default_options=DEFAULT_DAILY_OPTIONS,
         ),
         _placeholder(
             script_id="event_placeholder",
@@ -75,6 +94,8 @@ def get_script_definitions() -> tuple[ScriptDefinition, ...]:
             category="系统",
             default_shortcut="Ctrl+F12",
         ),
+        )
+        if not definition.placeholder
     )
 
 
@@ -95,6 +116,24 @@ def _run_open_package(context: ScriptRunContext) -> ScriptRunResult:
             "no_find_count": result.no_find_count,
             "cards_opened": result.cards_opened,
         },
+    )
+
+
+def _run_daily_script(context: ScriptRunContext) -> ScriptRunResult:
+    context.logger.info("日常脚本准备启动：options=%s", dict(context.script_options))
+    runner = create_daily_runner(
+        config=context.config,
+        dry_run=context.dry_run,
+        skip_delays=context.skip_delays,
+        logger=context.logger,
+        control=context.control,
+        options=dict(context.script_options),
+    )
+    result = runner.run()
+    return ScriptRunResult(
+        exit_reason=result.exit_reason,
+        iterations=result.steps,
+        details={"modules": result.modules},
     )
 
 

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 import tempfile
-import time
 import unittest
 from pathlib import Path
 
@@ -17,7 +16,7 @@ class GuiApiTests(unittest.TestCase):
         self.assertTrue(state["ok"])
         self.assertEqual(state["app"]["title"], "MXD脚本库")
         self.assertEqual(state["runtime"]["logDir"], str(appdata / "MXDScriptLibrary" / "logs"))
-        self.assertGreaterEqual(len(state["runtime"]["scripts"]), 4)
+        self.assertEqual(len(state["runtime"]["scripts"]), 2)
 
     def test_save_shortcuts_rejects_escape(self) -> None:
         with _temporary_local_appdata():
@@ -25,6 +24,15 @@ class GuiApiTests(unittest.TestCase):
 
         self.assertFalse(response["ok"])
         self.assertIn("Esc", response["error"])
+
+    def test_save_shortcuts_allows_empty_to_disable_hotkey(self) -> None:
+        with _temporary_local_appdata():
+            api = GuiApi()
+            response = api.save_shortcuts({"open_package": ""})
+            state = api.get_state()
+
+        self.assertTrue(response["ok"])
+        self.assertEqual(state["settings"]["shortcuts"]["open_package"], "")
 
     def test_save_run_options_persists_hotkey_runtime_mode(self) -> None:
         with _temporary_local_appdata():
@@ -36,31 +44,23 @@ class GuiApiTests(unittest.TestCase):
         self.assertTrue(state["settings"]["dryRun"])
         self.assertTrue(state["settings"]["skipDelays"])
 
-    def test_placeholder_script_emits_log_events(self) -> None:
+    def test_daily_script_options_default_enabled_and_persist(self) -> None:
         with _temporary_local_appdata():
             api = GuiApi()
-            response = api.start_script(
-                "event_placeholder",
-                {"dryRun": True, "skipDelays": True},
+            state = api.get_state()
+            response = api.save_script_options(
+                "daily_script",
+                {"gugu": False, "matchThreshold": 0.94},
             )
-            self.assertTrue(response["ok"])
+            next_state = GuiApi().get_state()
 
-            for _ in range(20):
-                state = api.get_state()["runtime"]
-                script = next(
-                    item for item in state["scripts"] if item["id"] == "event_placeholder"
-                )
-                if script["status"] == "finished":
-                    break
-                time.sleep(0.01)
-            else:
-                self.fail("placeholder script did not finish")
-
-            events = api.poll_events()["events"]
-
-        self.assertTrue(any(event["type"] == "log" for event in events))
-        self.assertTrue(any(event["type"] == "finished" for event in events))
-
+        self.assertTrue(state["settings"]["scriptOptions"]["daily_script"]["dailyQuest"])
+        self.assertTrue(state["settings"]["scriptOptions"]["daily_script"]["gugu"])
+        self.assertEqual(state["settings"]["scriptOptions"]["daily_script"]["matchThreshold"], 0.95)
+        self.assertTrue(response["ok"])
+        self.assertFalse(next_state["settings"]["scriptOptions"]["daily_script"]["gugu"])
+        self.assertTrue(next_state["settings"]["scriptOptions"]["daily_script"]["otherDaily"])
+        self.assertEqual(next_state["settings"]["scriptOptions"]["daily_script"]["matchThreshold"], 0.94)
 
 class _temporary_local_appdata:
     def __init__(self) -> None:

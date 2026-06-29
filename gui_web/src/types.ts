@@ -1,4 +1,5 @@
 export type ScriptStatus = "idle" | "running" | "paused" | "stopping" | "finished" | "error";
+export type ScriptOptionValue = boolean | number;
 
 export interface ScriptItem {
   id: string;
@@ -7,6 +8,7 @@ export interface ScriptItem {
   description: string;
   module: string;
   defaultShortcut: string;
+  defaultOptions: Record<string, ScriptOptionValue>;
   placeholder: boolean;
   requiresMousePrecision: boolean;
   status: ScriptStatus;
@@ -22,6 +24,7 @@ export interface RuntimeState {
 
 export interface AppSettings {
   shortcuts: Record<string, string>;
+  scriptOptions: Record<string, Record<string, ScriptOptionValue>>;
   theme: ThemePreference;
   dryRun: boolean;
   skipDelays: boolean;

@@ -30,6 +30,11 @@ class ShortcutTests(unittest.TestCase):
         with self.assertRaises(ShortcutError):
             normalize_shortcut_map(("first", "second"), {"first": "F8", "second": "f8"})
 
+    def test_allows_empty_shortcut_to_disable_hotkey(self) -> None:
+        shortcuts = normalize_shortcut_map(("first",), {"first": ""})
+
+        self.assertEqual(shortcuts, {"first": ""})
+
     def test_converts_function_key_to_windows_hotkey(self) -> None:
         hotkey = shortcut_to_win_hotkey("F10")
 

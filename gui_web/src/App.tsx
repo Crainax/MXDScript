@@ -30,6 +30,7 @@ import {
   pollEvents,
   resumeScript,
   saveRunOptions,
+  saveScriptOptions,
   saveShortcuts,
   startScript,
   stopScript,
@@ -42,10 +43,18 @@ import type {
   RuntimeEvent,
   RuntimeState,
   ScriptItem,
+  ScriptOptionValue,
   ThemePreference,
 } from "./types";
 
 const MAX_LOG_LINES = 800;
+const DAILY_SCRIPT_ID = "daily_script";
+const DAILY_OPTION_ITEMS = [
+  { key: "dailyQuest", label: "日常任务" },
+  { key: "gugu", label: "菇菇神社" },
+  { key: "summerDaily", label: "活动签到" },
+  { key: "otherDaily", label: "其他每日" },
+] as const;
 
 export function App() {
   const [appState, setAppState] = useState<AppState | null>(null);
@@ -110,6 +119,10 @@ export function App() {
   const visibleLogs = useMemo(
     () => (selectedScript ? logs.filter((line) => line.scriptId === selectedScript.id) : logs),
     [logs, selectedScript],
+  );
+  const selectedScriptOptions = useMemo(
+    () => (selectedScript && settings ? scriptOptionsFor(settings, selectedScript) : {}),
+    [selectedScript, settings],
   );
 
   const applyRuntime = useCallback((nextRuntime: RuntimeState) => {
@@ -218,10 +231,44 @@ export function App() {
     }
   }, [applyRuntime]);
 
+  const updateSelectedScriptOption = useCallback(
+    async (key: string, value: ScriptOptionValue) => {
+      if (!selectedScript || !settings) {
+        return;
+      }
+      const nextOptions = {
+        ...scriptOptionsFor(settings, selectedScript),
+        [key]: value,
+      };
+      try {
+        const nextSettings = await saveScriptOptions(selectedScript.id, nextOptions);
+        setAppState((current) => (current ? { ...current, settings: nextSettings } : current));
+        setMessage(null);
+      } catch (error) {
+        setMessage(error instanceof Error ? error.message : "保存脚本配置失败");
+      }
+    },
+    [selectedScript, settings],
+  );
+
   const handleShortcutCapture = useCallback(
     async (scriptId: string, event: ReactKeyboardEvent<HTMLButtonElement>) => {
       event.preventDefault();
       event.stopPropagation();
+      if (event.nativeEvent.key === "Backspace") {
+        if (!settings) {
+          return;
+        }
+        try {
+          const nextSettings = await saveShortcuts({ ...settings.shortcuts, [scriptId]: "" });
+          setAppState((current) => (current ? { ...current, settings: nextSettings } : current));
+          setEditingShortcutId(null);
+          setMessage("已清除快捷键。");
+        } catch (error) {
+          setMessage(error instanceof Error ? error.message : "保存快捷键失败");
+        }
+        return;
+      }
       if (event.nativeEvent.key === "Escape") {
         setMessage("Esc 不能作为启动快捷键。");
         return;
@@ -328,6 +375,9 @@ export function App() {
                 onStop={() => void runStop()}
               />
             ) : null}
+            {selectedScript?.id === DAILY_SCRIPT_ID ? (
+              <DailyOptionsPanel options={selectedScriptOptions} onChange={updateSelectedScriptOption} />
+            ) : null}
             {message ? (
               <div className="notice">
                 <AlertCircle size={16} />
@@ -404,7 +454,7 @@ function ScriptList(props: {
             >
               {props.editingShortcutId === script.id
                 ? "按下快捷键"
-                : props.shortcuts[script.id] ?? script.defaultShortcut}
+                : shortcutLabel(props.shortcuts[script.id] ?? script.defaultShortcut)}
             </button>
           </div>
         </article>
@@ -445,7 +495,7 @@ function ScriptControlPanel(props: {
         </div>
         <div>
           <dt>启动快捷键</dt>
-          <dd>{props.shortcut}</dd>
+          <dd>{shortcutLabel(props.shortcut)}</dd>
         </div>
       </dl>
       <div className="button-row">
@@ -467,6 +517,68 @@ function ScriptControlPanel(props: {
         </button>
       </div>
     </div>
+  );
+}
+
+function DailyOptionsPanel(props: {
+  options: Record<string, ScriptOptionValue>;
+  onChange: (key: string, value: ScriptOptionValue) => void;
+}) {
+  const onChange = props.onChange;
+  const thresholdValue = optionNumber(props.options.matchThreshold, 0.95);
+  const [thresholdText, setThresholdText] = useState(formatThreshold(thresholdValue));
+
+  useEffect(() => {
+    setThresholdText(formatThreshold(thresholdValue));
+  }, [thresholdValue]);
+
+  const commitThreshold = useCallback(() => {
+    const nextValue = Number(thresholdText);
+    if (!Number.isFinite(nextValue)) {
+      setThresholdText(formatThreshold(thresholdValue));
+      return;
+    }
+    const clampedValue = clampMatchThreshold(nextValue);
+    setThresholdText(formatThreshold(clampedValue));
+    onChange("matchThreshold", clampedValue);
+  }, [onChange, thresholdText, thresholdValue]);
+
+  return (
+    <section className="daily-options-panel">
+      <div className="panel-header">
+        <div>
+          <div className="category-label">脚本配置</div>
+          <h2>日常模块</h2>
+        </div>
+      </div>
+      <div className="daily-option-list">
+        {DAILY_OPTION_ITEMS.map((item) => (
+          <label className="daily-option" key={item.key}>
+            <input
+              type="checkbox"
+              checked={optionBoolean(props.options[item.key], true)}
+              onChange={(event) => props.onChange(item.key, event.target.checked)}
+            />
+            <span>{item.label}</span>
+          </label>
+        ))}
+      </div>
+      <label className="daily-threshold">
+        <span>找图容忍值</span>
+        <input
+          type="text"
+          inputMode="decimal"
+          value={thresholdText}
+          onBlur={commitThreshold}
+          onChange={(event) => setThresholdText(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.currentTarget.blur();
+            }
+          }}
+        />
+      </label>
+    </section>
   );
 }
 
@@ -624,6 +736,33 @@ function normalizeEventKey(key: string): string | null {
     return key.toUpperCase();
   }
   return null;
+}
+
+function shortcutLabel(shortcut: string): string {
+  return shortcut.trim() ? shortcut : "未设置";
+}
+
+function scriptOptionsFor(settings: AppSettings, script: ScriptItem): Record<string, ScriptOptionValue> {
+  return {
+    ...script.defaultOptions,
+    ...(settings.scriptOptions?.[script.id] ?? {}),
+  };
+}
+
+function optionBoolean(value: ScriptOptionValue | undefined, fallback: boolean): boolean {
+  return typeof value === "boolean" ? value : fallback;
+}
+
+function optionNumber(value: ScriptOptionValue | undefined, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+function clampMatchThreshold(value: number): number {
+  return Math.min(1, Math.max(0.5, value));
+}
+
+function formatThreshold(value: number): string {
+  return String(Number(value.toFixed(3)));
 }
 
 function readStoredTheme(fallback: ThemePreference): ThemePreference {

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import subprocess
 import sys
@@ -40,11 +41,13 @@ class GuiApi:
 
     def start_script(self, script_id: str, options: dict[str, Any] | None = None) -> dict[str, Any]:
         options = options or {}
+        settings = self._load_settings()
         return self._call(
             lambda: self.manager.start(
                 script_id,
                 dry_run=bool(options.get("dryRun", False)),
                 skip_delays=bool(options.get("skipDelays", False)),
+                script_options=_script_options_for(settings, script_id),
             )
         )
 
@@ -83,6 +86,31 @@ class GuiApi:
         _write_json(settings_path(), settings)
         return {"ok": True, "settings": settings}
 
+    def save_script_options(self, script_id: str, options: dict[str, Any]) -> dict[str, Any]:
+        settings = self._load_settings()
+        defaults = _default_script_options(self.manager)
+        if script_id not in defaults:
+            return {"ok": False, "error": f"Unknown configurable script: {script_id}"}
+
+        current = settings.get("scriptOptions")
+        if not isinstance(current, dict):
+            current = {}
+
+        merged = dict(defaults[script_id])
+        existing = current.get(script_id)
+        if isinstance(existing, dict):
+            for key, value in existing.items():
+                if key in merged:
+                    merged[key] = _coerce_script_option(merged[key], value)
+        for key, value in options.items():
+            if key in merged:
+                merged[key] = _coerce_script_option(merged[key], value)
+
+        current[script_id] = merged
+        settings["scriptOptions"] = _normalize_script_options(self.manager, current)
+        _write_json(settings_path(), settings)
+        return {"ok": True, "settings": settings}
+
     def open_log_dir(self) -> dict[str, Any]:
         return self._call(lambda: _open_path(logs_dir()))
 
@@ -99,6 +127,7 @@ class GuiApi:
     def _load_settings(self) -> dict[str, Any]:
         defaults = {
             "shortcuts": _default_shortcuts(self.manager),
+            "scriptOptions": _default_script_options(self.manager),
             "theme": "system",
             "dryRun": False,
             "skipDelays": False,
@@ -128,6 +157,9 @@ class GuiApi:
         theme = data.get("theme")
         if theme in {"system", "light", "dark"}:
             defaults["theme"] = theme
+        script_options = data.get("scriptOptions")
+        if isinstance(script_options, dict):
+            defaults["scriptOptions"] = _normalize_script_options(self.manager, script_options)
         defaults["dryRun"] = bool(data.get("dryRun", defaults["dryRun"]))
         defaults["skipDelays"] = bool(data.get("skipDelays", defaults["skipDelays"]))
         return defaults
@@ -143,6 +175,8 @@ class GuiApi:
 
         for definition in self.manager.definitions:
             shortcut = str(shortcuts.get(definition.id, definition.default_shortcut))
+            if not shortcut.strip():
+                continue
             try:
                 hotkey = shortcut_to_win_hotkey(shortcut)
             except ShortcutError:
@@ -169,6 +203,7 @@ class GuiApi:
                     script_id,
                     dry_run=bool(settings.get("dryRun", False)),
                     skip_delays=bool(settings.get("skipDelays", False)),
+                    script_options=_script_options_for(settings, script_id),
                 )
                 return
 
@@ -199,6 +234,65 @@ def _write_json(path: Path, data: dict[str, Any]) -> None:
 
 def _default_shortcuts(manager: ScriptManager) -> dict[str, str]:
     return {definition.id: definition.default_shortcut for definition in manager.definitions}
+
+
+def _default_script_options(manager: ScriptManager) -> dict[str, dict[str, Any]]:
+    return {
+        definition.id: {
+            str(key): _default_script_option_value(value)
+            for key, value in definition.default_options.items()
+        }
+        for definition in manager.definitions
+        if definition.default_options
+    }
+
+
+def _normalize_script_options(
+    manager: ScriptManager,
+    raw_options: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
+    normalized = _default_script_options(manager)
+    for script_id, options in raw_options.items():
+        if script_id not in normalized or not isinstance(options, dict):
+            continue
+        merged = dict(normalized[script_id])
+        for key, value in options.items():
+            if key in merged:
+                merged[key] = _coerce_script_option(merged[key], value)
+        normalized[script_id] = merged
+    return normalized
+
+
+def _default_script_option_value(value: Any) -> Any:
+    if isinstance(value, bool):
+        return bool(value)
+    if isinstance(value, (int, float)):
+        return float(value)
+    return value
+
+
+def _coerce_script_option(default_value: Any, value: Any) -> Any:
+    if isinstance(default_value, bool):
+        return bool(value)
+    if isinstance(default_value, (int, float)):
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return float(default_value)
+        if not math.isfinite(number):
+            return float(default_value)
+        if 0.0 <= float(default_value) <= 1.0:
+            return max(0.5, min(1.0, number))
+        return number
+    return value
+
+
+def _script_options_for(settings: dict[str, Any], script_id: str) -> dict[str, Any]:
+    script_options = settings.get("scriptOptions")
+    if not isinstance(script_options, dict):
+        return {}
+    options = script_options.get(script_id)
+    return dict(options) if isinstance(options, dict) else {}
 
 
 def _open_path(path: Path) -> dict[str, Any]:

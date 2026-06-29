@@ -94,6 +94,18 @@ class YjsDevice:
         if self.logger:
             self.logger.info("key_press key_code=%s count=%s", key_code, count)
 
+    def key_down(self, key_code: int) -> None:
+        result = self._dll_checked().M_KeyDown2(self.handle, key_code)
+        self._check("M_KeyDown2", result)
+        if self.logger:
+            self.logger.info("key_down key_code=%s", key_code)
+
+    def key_up(self, key_code: int) -> None:
+        result = self._dll_checked().M_KeyUp2(self.handle, key_code)
+        self._check("M_KeyUp2", result)
+        if self.logger:
+            self.logger.info("key_up key_code=%s", key_code)
+
     def move_to(self, x: int, y: int, *, smooth: bool = True) -> None:
         api_name = self._choose_move_api(x, y, smooth=smooth)
         result = getattr(self._dll_checked(), api_name)(self.handle, x, y)
@@ -101,11 +113,36 @@ class YjsDevice:
         if self.logger:
             self.logger.info("mouse_move api=%s x=%s y=%s smooth=%s", api_name, x, y, smooth)
 
+    def move_relative(self, dx: int, dy: int) -> None:
+        api_name = self._choose_relative_move_api()
+        result = getattr(self._dll_checked(), api_name)(self.handle, dx, dy)
+        self._check(api_name, result, x=dx, y=dy)
+        if self.logger:
+            self.logger.info("mouse_move_relative api=%s dx=%s dy=%s", api_name, dx, dy)
+
     def left_click(self, count: int = 1) -> None:
         result = self._dll_checked().M_LeftClick(self.handle, count)
         self._check("M_LeftClick", result)
         if self.logger:
             self.logger.info("left_click count=%s", count)
+
+    def left_down(self) -> None:
+        result = self._dll_checked().M_LeftDown(self.handle)
+        self._check("M_LeftDown", result)
+        if self.logger:
+            self.logger.info("left_down")
+
+    def left_up(self) -> None:
+        result = self._dll_checked().M_LeftUp(self.handle)
+        self._check("M_LeftUp", result)
+        if self.logger:
+            self.logger.info("left_up")
+
+    def mouse_wheel(self, amount: int) -> None:
+        result = self._dll_checked().M_MouseWheel(self.handle, amount)
+        self._check("M_MouseWheel", result)
+        if self.logger:
+            self.logger.info("mouse_wheel amount=%s", amount)
 
     def _dll_checked(self) -> ctypes.WinDLL:
         if not self._dll:
@@ -167,6 +204,14 @@ class YjsDevice:
             return "M_MoveTo2"
         return "M_MoveTo3" if smooth else "M_MoveTo3_D"
 
+    def _choose_relative_move_api(self) -> str:
+        configured = self.settings.move_api.lower()
+        if configured == "move_to3":
+            return "M_MoveR"
+        if configured in {"auto", "move_to2"}:
+            return "M_MoveR2"
+        raise YjsError(f"Unsupported yjs.move_api: {self.settings.move_api}")
+
     def _check(self, api_name: str, result: int, *, x: int | None = None, y: int | None = None) -> None:
         if result != 0:
             if result in {-1, 0xFFFFFFFF}:
@@ -216,11 +261,25 @@ class YjsDevice:
         dll.M_ReleaseAllKey.argtypes = [handle]
         dll.M_KeyPress2.restype = int_arg
         dll.M_KeyPress2.argtypes = [handle, int_arg, int_arg]
+        dll.M_KeyDown2.restype = int_arg
+        dll.M_KeyDown2.argtypes = [handle, int_arg]
+        dll.M_KeyUp2.restype = int_arg
+        dll.M_KeyUp2.argtypes = [handle, int_arg]
 
         dll.M_LeftClick.restype = int_arg
         dll.M_LeftClick.argtypes = [handle, int_arg]
+        dll.M_LeftDown.restype = int_arg
+        dll.M_LeftDown.argtypes = [handle]
+        dll.M_LeftUp.restype = int_arg
+        dll.M_LeftUp.argtypes = [handle]
+        dll.M_MouseWheel.restype = int_arg
+        dll.M_MouseWheel.argtypes = [handle, int_arg]
         dll.M_ResolutionUsed.restype = int_arg
         dll.M_ResolutionUsed.argtypes = [handle, int_arg, int_arg]
+        dll.M_MoveR.restype = int_arg
+        dll.M_MoveR.argtypes = [handle, int_arg, int_arg]
+        dll.M_MoveR2.restype = int_arg
+        dll.M_MoveR2.argtypes = [handle, int_arg, int_arg]
         dll.M_MoveTo2.restype = int_arg
         dll.M_MoveTo2.argtypes = [handle, int_arg, int_arg]
         dll.M_MoveTo3.restype = int_arg

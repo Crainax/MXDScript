@@ -101,6 +101,16 @@ class GuiHttpServer:
                         )
                     )
                     return
+                if parsed.path == "/api/script-options":
+                    script_id = str(body.get("scriptId", ""))
+                    options = body.get("options")
+                    self._send_json(
+                        api.save_script_options(
+                            script_id,
+                            options if isinstance(options, dict) else {},
+                        )
+                    )
+                    return
                 if parsed.path == "/api/open-log-dir":
                     self._send_json(api.open_log_dir())
                     return

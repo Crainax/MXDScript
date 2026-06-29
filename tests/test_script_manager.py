@@ -32,12 +32,13 @@ class ScriptManagerTests(unittest.TestCase):
                     os.environ["LOCALAPPDATA"] = old
 
         scripts = snapshot["scripts"]
-        self.assertGreaterEqual(len(scripts), 4)
+        self.assertEqual(len(scripts), 2)
         self.assertEqual(scripts[0]["id"], "open_package")
         self.assertEqual(scripts[0]["name"], "自动开包")
         self.assertEqual(scripts[0]["defaultShortcut"], "F10")
         self.assertFalse(scripts[0]["placeholder"])
-        self.assertTrue(any(script["placeholder"] for script in scripts[1:]))
+        self.assertEqual(scripts[1]["id"], "daily_script")
+        self.assertFalse(scripts[1]["placeholder"])
 
     def test_script_logger_uses_unique_file_per_run(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

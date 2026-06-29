@@ -12,7 +12,7 @@ from mhscript_yjs.runtime.logging import log_important
 from mhscript_yjs.vision.matcher import TemplateMatcher, TemplateNotFoundError
 from mhscript_yjs.vision.screenshot import MssScreenCapture
 from mhscript_yjs.vision.types import ImageGroup, MatchResult, Region
-from mhscript_yjs.windows.maple import WindowInfo, find_window, refresh_window_info
+from mhscript_yjs.windows.maple import WindowInfo, refresh_window_info
 
 if TYPE_CHECKING:
     from mhscript_yjs.scripts.registry import ScriptRunContext

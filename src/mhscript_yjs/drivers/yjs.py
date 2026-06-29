@@ -48,6 +48,8 @@ class YjsDevice:
         self._declare_api(self._dll)
         self._handle = self._open_handle(self._dll)
         if self._is_invalid_handle(self._handle):
+            self._handle = None
+            self._dll = None
             raise YjsDeviceNotFoundError(self._hardware_not_found_message())
 
         if self.settings.absolute_move:

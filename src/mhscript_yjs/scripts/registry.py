@@ -12,6 +12,11 @@ from mhscript_yjs.scripts.daily.combine_main import (
     DEFAULT_DAILY_OPTIONS,
     create_runner as create_daily_runner,
 )
+from mhscript_yjs.scripts.tool.coordinate_mover import (
+    COORDINATE_MOVER_SCRIPT_ID,
+    DEFAULT_COORDINATE_MOVER_OPTIONS,
+    run_coordinate_mover,
+)
 from mhscript_yjs.scripts.tool.image_debug import (
     COORDINATE_DETECTOR_SCRIPT_ID,
     DEFAULT_COORDINATE_DETECTOR_OPTIONS,
@@ -27,6 +32,10 @@ def _noop_emit_data(payload: Mapping[str, Any]) -> None:
     return None
 
 
+def _noop_request_pause() -> None:
+    return None
+
+
 @dataclass(frozen=True)
 class ScriptRunContext:
     config: ProjectConfig
@@ -36,6 +45,7 @@ class ScriptRunContext:
     skip_delays: bool
     script_options: Mapping[str, Any] = field(default_factory=dict)
     emit_data: Callable[[Mapping[str, Any]], None] = _noop_emit_data
+    request_pause: Callable[[], None] = _noop_request_pause
 
 
 @dataclass(frozen=True)
@@ -113,6 +123,18 @@ def get_script_definitions() -> tuple[ScriptDefinition, ...]:
             requires_mouse_precision=False,
             default_options=DEFAULT_COORDINATE_DETECTOR_OPTIONS,
         ),
+        ScriptDefinition(
+            id=COORDINATE_MOVER_SCRIPT_ID,
+            name="移动坐标",
+            category="测试",
+            description="按目标坐标执行一次 Move 或 MoveB 移动。",
+            module="mhscript_yjs.scripts.tool.coordinate_mover",
+            default_shortcut="",
+            runner=_run_coordinate_mover,
+            placeholder=False,
+            requires_mouse_precision=True,
+            default_options=DEFAULT_COORDINATE_MOVER_OPTIONS,
+        ),
         _placeholder(
             script_id="event_placeholder",
             name="活动脚本占位",
@@ -154,6 +176,15 @@ def _run_coordinate_detector(context: ScriptRunContext) -> ScriptRunResult:
     )
 
 
+def _run_coordinate_mover(context: ScriptRunContext) -> ScriptRunResult:
+    result = run_coordinate_mover(context)
+    return ScriptRunResult(
+        exit_reason=result.exit_reason,
+        iterations=result.iterations,
+        details=dict(result.details),
+    )
+
+
 def _run_open_package(context: ScriptRunContext) -> ScriptRunResult:
     context.logger.info("自动开包脚本准备启动。")
     runner = create_runner(
@@ -183,6 +214,7 @@ def _run_daily_script(context: ScriptRunContext) -> ScriptRunResult:
         logger=context.logger,
         control=context.control,
         options=dict(context.script_options),
+        request_pause=context.request_pause,
     )
     result = runner.run()
     return ScriptRunResult(

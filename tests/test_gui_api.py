@@ -16,7 +16,7 @@ class GuiApiTests(unittest.TestCase):
         self.assertTrue(state["ok"])
         self.assertEqual(state["app"]["title"], "MXD脚本库")
         self.assertEqual(state["runtime"]["logDir"], str(appdata / "MXDScriptLibrary" / "logs"))
-        self.assertEqual(len(state["runtime"]["scripts"]), 4)
+        self.assertEqual(len(state["runtime"]["scripts"]), 5)
 
     def test_save_shortcuts_rejects_escape(self) -> None:
         with _temporary_local_appdata():
@@ -58,12 +58,12 @@ class GuiApiTests(unittest.TestCase):
         self.assertTrue(state["settings"]["scriptOptions"]["daily_script"]["gugu"])
         self.assertTrue(state["settings"]["scriptOptions"]["daily_script"]["aut1"])
         self.assertTrue(state["settings"]["scriptOptions"]["daily_script"]["aut7"])
-        self.assertEqual(state["settings"]["scriptOptions"]["daily_script"]["matchThreshold"], 0.95)
+        self.assertNotIn("matchThreshold", state["settings"]["scriptOptions"]["daily_script"])
         self.assertTrue(response["ok"])
         self.assertFalse(next_state["settings"]["scriptOptions"]["daily_script"]["gugu"])
         self.assertFalse(next_state["settings"]["scriptOptions"]["daily_script"]["aut7"])
         self.assertTrue(next_state["settings"]["scriptOptions"]["daily_script"]["otherDaily"])
-        self.assertEqual(next_state["settings"]["scriptOptions"]["daily_script"]["matchThreshold"], 0.94)
+        self.assertNotIn("matchThreshold", next_state["settings"]["scriptOptions"]["daily_script"])
 
     def test_debug_script_options_persist_strings_and_zero_threshold(self) -> None:
         with _temporary_local_appdata():
@@ -98,6 +98,20 @@ class GuiApiTests(unittest.TestCase):
         self.assertTrue(response["ok"])
         self.assertEqual(state["settings"]["scriptOptions"]["coordinate_detector"]["intervalSeconds"], 5.0)
         self.assertEqual(state["settings"]["scriptOptions"]["coordinate_detector"]["matchThreshold"], 1.0)
+
+    def test_coordinate_mover_options_persist_target_and_mode(self) -> None:
+        with _temporary_local_appdata():
+            api = GuiApi()
+            response = api.save_script_options(
+                "coordinate_mover",
+                {"targetX": "123", "targetY": "45", "moveMode": "Move"},
+            )
+            state = GuiApi().get_state()
+
+        self.assertTrue(response["ok"])
+        self.assertEqual(state["settings"]["scriptOptions"]["coordinate_mover"]["targetX"], "123")
+        self.assertEqual(state["settings"]["scriptOptions"]["coordinate_mover"]["targetY"], "45")
+        self.assertEqual(state["settings"]["scriptOptions"]["coordinate_mover"]["moveMode"], "Move")
 
 class _temporary_local_appdata:
     def __init__(self) -> None:

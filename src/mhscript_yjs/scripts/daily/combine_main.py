@@ -1,14 +1,21 @@
 from __future__ import annotations
 
 import logging
-import math
 import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
-from mhscript_yjs.characters import CharacterPosition, Job, LaraController, LynnController, MoveTarget, PositionTracker
+from mhscript_yjs.characters import (
+    CharacterPosition,
+    Job,
+    LaraController,
+    LynnController,
+    MoveOnlyController,
+    MoveTarget,
+    PositionTracker,
+)
 from mhscript_yjs.characters.actions import CharacterActions
 from mhscript_yjs.characters.controller import CharacterController
 from mhscript_yjs.core.config import ProjectConfig
@@ -18,6 +25,7 @@ from mhscript_yjs.drivers.keycodes import keycode
 from mhscript_yjs.drivers.yjs import YjsDevice
 from mhscript_yjs.runtime.control import NullRunControl, RunControl, StopRequested
 from mhscript_yjs.runtime.logging import log_important
+from mhscript_yjs.runtime.sound import beep as play_beep
 from mhscript_yjs.runtime.timing import NullSleeper, Sleeper
 from mhscript_yjs.scripts.daily.combine_main_source import SOURCE as COMBINE_MAIN_SOURCE
 from mhscript_yjs.vision.matcher import TemplateMatcher
@@ -27,9 +35,7 @@ from mhscript_yjs.windows.maple import WindowInfo, find_window, refresh_window_i
 
 
 DAILY_SCRIPT_ID = "daily_script"
-DEFAULT_MATCH_THRESHOLD = 0.95
-MIN_MATCH_THRESHOLD = 0.5
-MAX_MATCH_THRESHOLD = 1.0
+DAILY_MATCH_THRESHOLD = 1.0
 AUT_FLAGS = (1, 2, 3, 4, 5, 6, 7)
 DEFAULT_DAILY_OPTIONS = {
     "dailyQuest": True,
@@ -37,9 +43,8 @@ DEFAULT_DAILY_OPTIONS = {
     "summerDaily": True,
     "otherDaily": True,
     **{f"aut{flag}": True for flag in AUT_FLAGS},
-    "matchThreshold": DEFAULT_MATCH_THRESHOLD,
 }
-JOB_DETECTION_THRESHOLD = 0.99
+JOB_DETECTION_THRESHOLD = DAILY_MATCH_THRESHOLD
 COORDINATE_PIXEL_COLOR_TOLERANCE = 18
 COORDINATE_PIXEL_ALLOWED_BAD_PIXELS = 2
 
@@ -49,10 +54,6 @@ class DailyScriptResult:
     exit_reason: str
     steps: int
     modules: dict[str, str] = field(default_factory=dict)
-
-
-class KmPauseRequested(RuntimeError):
-    pass
 
 
 class DailyRunner:
@@ -68,6 +69,7 @@ class DailyRunner:
         control: RunControl | None = None,
         window_info: WindowInfo | None = None,
         capture: MssScreenCapture | None = None,
+        request_pause: Callable[[], None] | None = None,
     ) -> None:
         self.config = config
         self.device = device
@@ -75,8 +77,8 @@ class DailyRunner:
         self.sleeper = sleeper
         self.logger = logger
         self.options = _coerce_options(options)
-        self.match_threshold = float(self.options["matchThreshold"])
         self.control = control or NullRunControl()
+        self.request_pause = request_pause or (lambda: None)
         self.window_info = window_info
         self._dynamic_window = window_info is None
         self.capture = capture
@@ -86,6 +88,7 @@ class DailyRunner:
         self.modules: dict[str, str] = {}
         self._branch_eval_entries: set[int] = set()
         self._character_controller: CharacterController | None = None
+        self._move_only_controller: CharacterController | None = None
 
     def run(self) -> DailyScriptResult:
         try:
@@ -97,9 +100,6 @@ class DailyRunner:
         except StopRequested:
             self.logger.info("daily_stop_requested steps=%s", self.steps)
             return self._result("stop_requested")
-        except KmPauseRequested as exc:
-            self.logger.warning("daily_pause_requested reason=%s", exc)
-            return self._result("script_pause")
         finally:
             self.device.close()
             if self.capture is not None:
@@ -180,7 +180,6 @@ class DailyRunner:
             JOB_DETECTION_THRESHOLD,
             "intX",
             "intY",
-            use_configured_threshold=False,
         ):
             self.vars["questPointer"] = 2
             self.vars["CurrentJob"] = self.vars["JobLynn"]
@@ -191,7 +190,6 @@ class DailyRunner:
             JOB_DETECTION_THRESHOLD,
             "intX",
             "intY",
-            use_configured_threshold=False,
         ):
             self.vars["questPointer"] = 0
             self.vars["CurrentJob"] = self.vars["JobLara"]
@@ -237,6 +235,8 @@ class DailyRunner:
         if lowered == "getxy" and self._run_character_getxy():
             return
         if lowered == "move" and self._run_character_move():
+            return
+        if lowered in {"moveb", "move_b"} and self._run_character_move(move_only=True):
             return
         if lowered in {"standspell", "lynnstandspell", "larastandspell"} and self._run_character_stand_spell():
             return
@@ -362,10 +362,16 @@ class DailyRunner:
             self.logger.warning("msgbox=%s", self._eval_expr(line[7:].strip()))
             return
         if lower.startswith("beep "):
-            self.logger.warning("beep %s", line[5:].strip())
+            args = self._eval_args(line[5:])
+            frequency = int(args[0]) if args else 800
+            duration_ms = int(args[1]) if len(args) > 1 else 120
+            play_beep(frequency, duration_ms, logger=self.logger)
             return
         if lower == "pause":
-            raise KmPauseRequested("CombineMain Pause command reached")
+            log_important(self.logger, "[Daily] KM Pause command reached; script paused")
+            self.request_pause()
+            self.control.wait_if_paused()
+            return
         if lower.startswith("delayrandom "):
             first, second = self._eval_args(line[12:])
             min_ms, max_ms = int(first), int(second)
@@ -490,15 +496,12 @@ class DailyRunner:
         threshold: float,
         out_x: str,
         out_y: str,
-        *,
-        use_configured_threshold: bool = True,
     ) -> bool:
         self._checkpoint()
         match = self._match_paths(
             raw_paths,
             region,
             threshold,
-            use_configured_threshold=use_configured_threshold,
         )
         if match is None:
             self.vars[out_x.strip()] = -1
@@ -523,15 +526,13 @@ class DailyRunner:
         threshold: float,
         *,
         name: str | None = None,
-        use_configured_threshold: bool = True,
     ) -> MatchResult | None:
         self._checkpoint()
         paths = tuple(self._resolve_image_path(path) for path in raw_paths)
-        threshold = self._effective_threshold(threshold) if use_configured_threshold else threshold
         group = ImageGroup(
             name=name or "|".join(path.name for path in paths),
             paths=paths,
-            threshold=threshold,
+            threshold=DAILY_MATCH_THRESHOLD,
         )
         return self.matcher.match_any(group, region)
 
@@ -642,7 +643,7 @@ class DailyRunner:
                 threshold,
             )
             return me, anchor
-        effective_threshold = self._effective_threshold(threshold)
+        effective_threshold = DAILY_MATCH_THRESHOLD
         me_path = self._resolve_image_path(r"E:\MHImg\Me.bmp")
         anchor_path = self._resolve_image_path(r"E:\MHImg\MapAnchor.bmp")
         groups = (
@@ -705,8 +706,8 @@ class DailyRunner:
             self.vars["intY"] = -1
         return True
 
-    def _run_character_move(self) -> bool:
-        controller = self._active_character_controller()
+    def _run_character_move(self, *, move_only: bool = False) -> bool:
+        controller = self._active_move_only_controller() if move_only else self._active_character_controller()
         if controller is None:
             return False
         target = MoveTarget(
@@ -726,6 +727,36 @@ class DailyRunner:
                 result.reason,
             )
         return True
+
+    def _active_move_only_controller(self) -> CharacterController | None:
+        job = self._active_job()
+        if job is None:
+            return None
+        if self._move_only_controller is None:
+            self._move_only_controller = self._create_move_only_controller()
+        return self._move_only_controller
+
+    def _create_move_only_controller(self) -> CharacterController:
+        if self.window_info is None:
+            raise RuntimeError("MoveOnly controller requires initialized window info.")
+        tracker = PositionTracker(
+            window=self.window_info,
+            match_image=self._match_character_image,
+            device=self.device,
+            sleeper=self.sleeper,
+            logger=self.logger,
+            position_sink=self._sync_character_position,
+            window_provider=self._current_window_info,
+            match_coordinates=self._match_character_coordinates,
+        )
+        actions = CharacterActions(self.device, self.sleeper, self.logger)
+        return MoveOnlyController(
+            tracker=tracker,
+            actions=actions,
+            match_image=self._match_character_image,
+            logger=self.logger,
+            jump_range=int(self.vars.get("JumpRange", 24)),
+        )
 
     def _run_character_stand_spell(self) -> bool:
         controller = self._active_character_controller()
@@ -831,15 +862,18 @@ class DailyRunner:
             )
             self._press_scheduler_hotkey(delay_ms=400)
             if self._wait_for_scheduler_ui_hidden():
-                log_important(self.logger, "[ReceiveQuest] SchedulerUI 已关闭")
-                return
+                self.sleeper.delay_ms(250)
+                if not self._scheduler_panel_visible():
+                    log_important(self.logger, "[ReceiveQuest] SchedulerUI 已关闭")
+                    return
+                self.logger.info("[ReceiveQuest] SchedulerUI 隐藏确认后复查仍可见，继续重试")
             self.logger.info("[ReceiveQuest] SchedulerUI 关闭后仍可见，准备重试")
         if self._scheduler_panel_visible():
             self.logger.warning("[ReceiveQuest] SchedulerUI may still be open after close attempts")
 
     def _wait_for_scheduler_ui_hidden(self) -> bool:
         hidden_checks = 0
-        for check in range(1, 9):
+        for check in range(1, 13):
             if self._scheduler_panel_visible():
                 hidden_checks = 0
                 self.logger.info("[ReceiveQuest] SchedulerUI 关闭确认第 %s 次：仍可见", check)
@@ -850,7 +884,7 @@ class DailyRunner:
                     check,
                     hidden_checks,
                 )
-                if hidden_checks >= 2:
+                if hidden_checks >= 3:
                     return True
             self.sleeper.delay_ms(150)
         return False
@@ -1117,9 +1151,6 @@ class DailyRunner:
         self.logger.debug("gugu_match name=%s matched=%s", name, matched)
         return matched
 
-    def _effective_threshold(self, threshold: float) -> float:
-        return min(threshold, self.match_threshold)
-
     def _gugu_warn(self, message: str) -> None:
         self.logger.warning("[Gugu] %s", message)
         log_important(self.logger, "[Gugu] 警告：%s", message)
@@ -1211,15 +1242,19 @@ def create_runner(
     logger: logging.Logger,
     control: RunControl,
     options: dict[str, Any] | None = None,
+    request_pause: Callable[[], None] | None = None,
 ) -> DailyRunner:
     device: InputDevice = (
         DryRunDevice(logger=logger) if dry_run else YjsDevice(settings=config.yjs, logger=logger)
     )
     capture = MssScreenCapture()
     matcher = TemplateMatcher(capture=capture, logger=logger)
+    effective_skip_delays = skip_delays and dry_run
+    if skip_delays and not dry_run:
+        logger.warning("[Timing] 实机模式已忽略“跳过等待”，按键按住时长必须保留以匹配 KM 行为。")
     sleeper = (
         NullSleeper(logger=logger, control=control)
-        if skip_delays
+        if effective_skip_delays
         else Sleeper(logger=logger, control=control)
     )
     return DailyRunner(
@@ -1231,6 +1266,7 @@ def create_runner(
         options=options,
         control=control,
         capture=capture,
+        request_pause=request_pause,
     )
 
 
@@ -1240,21 +1276,9 @@ def _coerce_options(options: dict[str, Any] | None) -> dict[str, Any]:
     for key, default in DEFAULT_DAILY_OPTIONS.items():
         if isinstance(default, bool):
             coerced[key] = bool(raw.get(key, default))
-        elif key == "matchThreshold":
-            coerced[key] = _coerce_match_threshold(raw.get(key, default))
         else:
             coerced[key] = raw.get(key, default)
     return coerced
-
-
-def _coerce_match_threshold(value: Any) -> float:
-    try:
-        threshold = float(value)
-    except (TypeError, ValueError):
-        return DEFAULT_MATCH_THRESHOLD
-    if not math.isfinite(threshold):
-        return DEFAULT_MATCH_THRESHOLD
-    return max(MIN_MATCH_THRESHOLD, min(MAX_MATCH_THRESHOLD, threshold))
 
 
 def _parse_subs(source: str) -> dict[str, list[str]]:

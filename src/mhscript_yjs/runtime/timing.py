@@ -46,4 +46,7 @@ class NullSleeper(Sleeper):
         milliseconds = self.random_source.randint(min_ms, max_ms)
         if self.logger:
             self.logger.debug("skip_delay_random_ms=%s range=%s-%s", milliseconds, min_ms, max_ms)
+        self.control.wait_if_paused()
+        if self.control.stop_requested():
+            raise StopRequested("stop requested")
         return milliseconds

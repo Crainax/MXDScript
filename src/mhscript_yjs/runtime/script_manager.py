@@ -12,7 +12,6 @@ from mhscript_yjs.drivers.yjs import YjsDeviceNotFoundError
 from mhscript_yjs.runtime.app_paths import logs_dir
 from mhscript_yjs.runtime.control import PauseController
 from mhscript_yjs.runtime.logging import (
-    IMPORTANT_LEVEL,
     close_logger_handlers,
     logger_file_path,
     log_important,
@@ -28,7 +27,7 @@ MousePrecisionFactory = Callable[[logging.Logger], MousePointerPrecisionManager]
 
 class ScriptEventHandler(logging.Handler):
     def __init__(self, events: queue.Queue[Event], script_id: str) -> None:
-        super().__init__(level=IMPORTANT_LEVEL)
+        super().__init__(level=logging.INFO)
         self.events = events
         self.script_id = script_id
 
@@ -183,9 +182,15 @@ class ScriptManager:
             self._controller.stop()
             self._states[script_id] = "stopping"
             mouse_precision = self._mouse_precision
+            worker = self._worker
 
         self._restore_mouse_precision(script_id, mouse_precision)
+        with self._lock:
+            if self._mouse_precision is mouse_precision:
+                self._mouse_precision = None
         self._emit_state(script_id, "stopping")
+        if worker is not None and worker.is_alive() and worker is not threading.current_thread():
+            worker.join(timeout=3)
         return self.snapshot()
 
     def _run_script(
@@ -251,6 +256,11 @@ class ScriptManager:
                 skip_delays=skip_delays,
                 script_options=script_options,
                 emit_data=lambda payload: self._emit_data(script_id, payload),
+                request_pause=lambda: self._request_pause_from_script(
+                    script_id,
+                    controller,
+                    mouse_precision,
+                ),
             )
             result = definition.runner(context)
             payload = {
@@ -299,10 +309,14 @@ class ScriptManager:
             )
             self._emit_state(script_id, "error")
         finally:
-            self._restore_mouse_precision(script_id, mouse_precision)
             with self._lock:
-                if self._mouse_precision is mouse_precision:
+                should_restore_mouse = (
+                    mouse_precision is not None and self._mouse_precision is mouse_precision
+                )
+                if should_restore_mouse:
                     self._mouse_precision = None
+            if should_restore_mouse:
+                self._restore_mouse_precision(script_id, mouse_precision)
             if logger is not None:
                 close_logger_handlers(logger)
 
@@ -329,6 +343,23 @@ class ScriptManager:
 
     def _emit_data(self, script_id: str, payload: Any) -> None:
         self._events.put({"type": "data", "scriptId": script_id, "payload": dict(payload)})
+
+    def _request_pause_from_script(
+        self,
+        script_id: str,
+        controller: PauseController,
+        mouse_precision: MousePointerPrecisionManager | None,
+    ) -> None:
+        with self._lock:
+            if self._active_script_id != script_id or self._controller is not controller:
+                return
+            if self._states[script_id] != "running":
+                return
+            controller.pause()
+            self._states[script_id] = "paused"
+
+        self._restore_mouse_precision(script_id, mouse_precision)
+        self._emit_state(script_id, "paused")
 
     def _require_definition(self, script_id: str) -> ScriptDefinition:
         try:

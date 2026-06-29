@@ -52,6 +52,7 @@ const MAX_LOG_LINES = 800;
 const DAILY_SCRIPT_ID = "daily_script";
 const IMAGE_RECOGNITION_SCRIPT_ID = "image_recognition";
 const COORDINATE_DETECTOR_SCRIPT_ID = "coordinate_detector";
+const COORDINATE_MOVER_SCRIPT_ID = "coordinate_mover";
 const DAILY_OPTION_ITEMS = [
   { key: "dailyQuest", label: "日常任务" },
   { key: "gugu", label: "菇菇神社" },
@@ -62,6 +63,9 @@ const AUT_OPTION_ITEMS = Array.from({ length: 7 }, (_, index) => ({
   key: `aut${index + 1}`,
   label: `AUT${index + 1}`,
 }));
+const LOG_LEVEL_OPTIONS = ["DEBUG", "INFO", "IMPORTANT", "WARNING", "ERROR", "CRITICAL"] as const;
+type LogLevelFilter = (typeof LOG_LEVEL_OPTIONS)[number];
+const DEFAULT_LOG_LEVEL_FILTERS: LogLevelFilter[] = ["IMPORTANT", "WARNING", "ERROR", "CRITICAL"];
 
 export function App() {
   const [appState, setAppState] = useState<AppState | null>(null);
@@ -74,6 +78,7 @@ export function App() {
   const [skipDelays, setSkipDelays] = useState(false);
   const [optionsLoaded, setOptionsLoaded] = useState(false);
   const [scriptData, setScriptData] = useState<Record<string, Record<string, unknown>>>({});
+  const [logLevelFilters, setLogLevelFilters] = useState<LogLevelFilter[]>(() => readStoredLogLevels());
   const logId = useRef(1);
 
   useEffect(() => {
@@ -100,6 +105,10 @@ export function App() {
   }, [resolvedTheme, themePreference]);
 
   useEffect(() => {
+    localStorage.setItem("mxdscript.logLevels", JSON.stringify(logLevelFilters));
+  }, [logLevelFilters]);
+
+  useEffect(() => {
     if (!optionsLoaded) {
       return;
     }
@@ -124,9 +133,16 @@ export function App() {
     () => runtime?.scripts.find((script) => script.id === runtime.activeScriptId) ?? null,
     [runtime?.activeScriptId, runtime?.scripts],
   );
+  const logLevelFilterSet = useMemo(() => new Set(logLevelFilters), [logLevelFilters]);
   const visibleLogs = useMemo(
-    () => (selectedScript ? logs.filter((line) => line.scriptId === selectedScript.id) : logs),
-    [logs, selectedScript],
+    () =>
+      logs.filter((line) => {
+        if (selectedScript && line.scriptId !== selectedScript.id) {
+          return false;
+        }
+        return logLevelFilterSet.has(normalizeLogLevel(line.level));
+      }),
+    [logLevelFilterSet, logs, selectedScript],
   );
   const selectedScriptOptions = useMemo(
     () => (selectedScript && settings ? scriptOptionsFor(settings, selectedScript) : {}),
@@ -316,6 +332,12 @@ export function App() {
     setThemePreference(theme);
   };
 
+  const toggleLogLevelFilter = useCallback((level: LogLevelFilter) => {
+    setLogLevelFilters((current) =>
+      current.includes(level) ? current.filter((item) => item !== level) : [...current, level],
+    );
+  }, []);
+
   if (!appState || !runtime || !settings) {
     return (
       <main className="app app-loading">
@@ -407,6 +429,13 @@ export function App() {
                 onChange={updateSelectedScriptOption}
               />
             ) : null}
+            {selectedScript?.id === COORDINATE_MOVER_SCRIPT_ID ? (
+              <CoordinateMoverOptionsPanel
+                options={selectedScriptOptions}
+                data={scriptData[selectedScript.id]}
+                onChange={updateSelectedScriptOption}
+              />
+            ) : null}
             {message ? (
               <div className="notice">
                 <AlertCircle size={16} />
@@ -419,6 +448,8 @@ export function App() {
             logs={visibleLogs}
             selectedScript={selectedScript}
             logDir={runtime.logDir}
+            logLevelFilters={logLevelFilters}
+            onToggleLogLevel={toggleLogLevelFilter}
             onOpenLogDir={() => void openLogDir().catch((error) => setMessage(String(error)))}
             onOpenCurrentLog={() => {
               if (!selectedScript?.logPath) {
@@ -553,25 +584,6 @@ function DailyOptionsPanel(props: {
   options: Record<string, ScriptOptionValue>;
   onChange: (key: string, value: ScriptOptionValue) => void;
 }) {
-  const onChange = props.onChange;
-  const thresholdValue = optionNumber(props.options.matchThreshold, 0.95);
-  const [thresholdText, setThresholdText] = useState(formatThreshold(thresholdValue));
-
-  useEffect(() => {
-    setThresholdText(formatThreshold(thresholdValue));
-  }, [thresholdValue]);
-
-  const commitThreshold = useCallback(() => {
-    const nextValue = Number(thresholdText);
-    if (!Number.isFinite(nextValue)) {
-      setThresholdText(formatThreshold(thresholdValue));
-      return;
-    }
-    const clampedValue = clampMatchThreshold(nextValue);
-    setThresholdText(formatThreshold(clampedValue));
-    onChange("matchThreshold", clampedValue);
-  }, [onChange, thresholdText, thresholdValue]);
-
   return (
     <section className="daily-options-panel">
       <div className="panel-header">
@@ -608,21 +620,6 @@ function DailyOptionsPanel(props: {
           </Fragment>
         ))}
       </div>
-      <label className="daily-threshold">
-        <span>找图容忍值</span>
-        <input
-          type="text"
-          inputMode="decimal"
-          value={thresholdText}
-          onBlur={commitThreshold}
-          onChange={(event) => setThresholdText(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") {
-              event.currentTarget.blur();
-            }
-          }}
-        />
-      </label>
     </section>
   );
 }
@@ -817,6 +814,96 @@ function CoordinateDetectorOptionsPanel(props: {
   );
 }
 
+function CoordinateMoverOptionsPanel(props: {
+  options: Record<string, ScriptOptionValue>;
+  data?: Record<string, unknown>;
+  onChange: (key: string, value: ScriptOptionValue) => void;
+}) {
+  const targetXValue = optionString(props.options.targetX, "");
+  const targetYValue = optionString(props.options.targetY, "");
+  const moveMode = optionString(props.options.moveMode, "MoveB") === "Move" ? "Move" : "MoveB";
+  const [targetXText, setTargetXText] = useState(targetXValue);
+  const [targetYText, setTargetYText] = useState(targetYValue);
+
+  useEffect(() => {
+    setTargetXText(targetXValue);
+  }, [targetXValue]);
+
+  useEffect(() => {
+    setTargetYText(targetYValue);
+  }, [targetYValue]);
+
+  const commitTargetX = useCallback(() => {
+    props.onChange("targetX", targetXText.trim());
+  }, [props, targetXText]);
+
+  const commitTargetY = useCallback(() => {
+    props.onChange("targetY", targetYText.trim());
+  }, [props, targetYText]);
+
+  return (
+    <section className="debug-options-panel">
+      <div className="panel-header">
+        <div>
+          <div className="category-label">脚本配置</div>
+          <h2>移动坐标</h2>
+        </div>
+      </div>
+      <div className="coordinate-move-panel standalone">
+        <div className="coordinate-move-title">目标坐标</div>
+        <div className="coordinate-move-fields">
+          <label className="debug-field compact">
+            <span>X</span>
+            <input
+              type="text"
+              inputMode="numeric"
+              value={targetXText}
+              onBlur={commitTargetX}
+              onChange={(event) => setTargetXText(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.currentTarget.blur();
+                }
+              }}
+            />
+          </label>
+          <label className="debug-field compact">
+            <span>Y</span>
+            <input
+              type="text"
+              inputMode="numeric"
+              value={targetYText}
+              onBlur={commitTargetY}
+              onChange={(event) => setTargetYText(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.currentTarget.blur();
+                }
+              }}
+            />
+          </label>
+        </div>
+      </div>
+      <div className="coordinate-move-panel">
+        <div className="coordinate-move-title">移动方式</div>
+        <div className="coordinate-mode-options">
+          {(["Move", "MoveB"] as const).map((mode) => (
+            <label className="daily-option" key={mode}>
+              <input
+                type="checkbox"
+                checked={moveMode === mode}
+                onChange={() => props.onChange("moveMode", mode)}
+              />
+              <span>{mode}</span>
+            </label>
+          ))}
+        </div>
+      </div>
+      <CoordinateMoverResult data={props.data} />
+    </section>
+  );
+}
+
 function ImageRecognitionResult({ data }: { data?: Record<string, unknown> }) {
   const matches = payloadArray(data, "matches");
   const message = payloadString(data, "message", "等待运行...");
@@ -900,10 +987,29 @@ function CoordinateDetectorResult({ data }: { data?: Record<string, unknown> }) 
   );
 }
 
+function CoordinateMoverResult({ data }: { data?: Record<string, unknown> }) {
+  const moveStatus = payloadRecord(data, "moveStatus");
+  const message = payloadString(data, "message", "等待运行...");
+  return (
+    <div className="debug-result">
+      <div className="debug-result-title">
+        <span>{message}</span>
+      </div>
+      {moveStatus ? (
+        <div className="debug-anchor-status">{formatMoveStatus(moveStatus)}</div>
+      ) : (
+        <div className="debug-empty">填写坐标后点击开始</div>
+      )}
+    </div>
+  );
+}
+
 function LogPanel(props: {
   logs: LogLine[];
   selectedScript: ScriptItem | null;
   logDir: string;
+  logLevelFilters: LogLevelFilter[];
+  onToggleLogLevel: (level: LogLevelFilter) => void;
   onOpenLogDir: () => void;
   onOpenCurrentLog: () => void;
   onClear: () => void;
@@ -924,6 +1030,18 @@ function LogPanel(props: {
         <div>
           <div className="category-label">日志</div>
           <h2>实时输出</h2>
+        </div>
+        <div className="log-level-filters" aria-label="日志等级筛选">
+          {LOG_LEVEL_OPTIONS.map((level) => (
+            <label className="log-level-filter" key={level}>
+              <input
+                type="checkbox"
+                checked={props.logLevelFilters.includes(level)}
+                onChange={() => props.onToggleLogLevel(level)}
+              />
+              <span>{level}</span>
+            </label>
+          ))}
         </div>
         <div className="icon-buttons">
           <button type="button" className="icon-button" title="打开日志目录" onClick={props.onOpenLogDir}>
@@ -1079,10 +1197,6 @@ function optionString(value: ScriptOptionValue | undefined, fallback: string): s
   return typeof value === "string" ? value : fallback;
 }
 
-function clampMatchThreshold(value: number): number {
-  return Math.min(1, Math.max(0.5, value));
-}
-
 function clampUnitThreshold(value: number): number {
   return Math.min(1, Math.max(0, value));
 }
@@ -1115,6 +1229,11 @@ function payloadUnknownArray(payload: Record<string, unknown> | undefined, key: 
   return Array.isArray(value) ? value : [];
 }
 
+function payloadRecord(payload: Record<string, unknown> | undefined, key: string): Record<string, unknown> | null {
+  const value = payload?.[key];
+  return isRecord(value) ? value : null;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -1137,12 +1256,51 @@ function formatRelativeLine(match: Record<string, unknown>, index: number): stri
   return `${index + 1}. 坐标 (${formatMaybeNumber(relativeX)}, ${formatMaybeNumber(relativeY)}) · 屏幕 (${formatMaybeNumber(x)}, ${formatMaybeNumber(y)}) · 分数 ${formatScore(score)}`;
 }
 
+function formatMoveStatus(status: Record<string, unknown>): string {
+  const state = payloadString(status, "state", "idle");
+  const mode = payloadString(status, "moveMode", "");
+  const message = payloadString(status, "message", "");
+  const targetX = payloadNumber(status, "targetX");
+  const targetY = payloadNumber(status, "targetY");
+  const attempts = payloadNumber(status, "attempts");
+  const target = targetX !== null && targetY !== null ? `(${targetX}, ${targetY})` : "";
+  const attemptsText = attempts !== null ? `尝试 ${attempts}` : "";
+  return [state, mode, target, attemptsText, message].filter(Boolean).join(" · ");
+}
+
 function formatMaybeNumber(value: number | null): string {
   return value === null ? "-" : String(value);
 }
 
 function formatScore(value: number | null): string {
   return value === null ? "-" : value.toFixed(3);
+}
+
+function normalizeLogLevel(level: string): LogLevelFilter {
+  const upper = level.toUpperCase();
+  return isLogLevelFilter(upper) ? upper : "INFO";
+}
+
+function isLogLevelFilter(value: string): value is LogLevelFilter {
+  return LOG_LEVEL_OPTIONS.includes(value as LogLevelFilter);
+}
+
+function readStoredLogLevels(): LogLevelFilter[] {
+  const raw = localStorage.getItem("mxdscript.logLevels");
+  if (!raw) {
+    return DEFAULT_LOG_LEVEL_FILTERS;
+  }
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) {
+      return DEFAULT_LOG_LEVEL_FILTERS;
+    }
+    return parsed.filter((value, index, values): value is LogLevelFilter => {
+      return typeof value === "string" && isLogLevelFilter(value) && values.indexOf(value) === index;
+    });
+  } catch {
+    return DEFAULT_LOG_LEVEL_FILTERS;
+  }
 }
 
 function readStoredTheme(fallback: ThemePreference): ThemePreference {

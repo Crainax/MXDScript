@@ -138,9 +138,9 @@ class DailyScriptTests(unittest.TestCase):
             },
         )
         self.assertEqual([action.name for action in device.actions], ["open", "close"])
-        self.assertEqual(runner.matcher.thresholds, [0.99, 0.99])  # type: ignore[attr-defined]
+        self.assertEqual(runner.matcher.thresholds, [1.0, 1.0])  # type: ignore[attr-defined]
 
-    def test_configured_match_threshold_relaxes_findpic_after_job_detection(self) -> None:
+    def test_daily_findpic_always_uses_exact_threshold(self) -> None:
         matcher = FakeMatcher()
         runner = DailyRunner(
             config=load_config(load_local=False),
@@ -160,7 +160,7 @@ class DailyScriptTests(unittest.TestCase):
             "y",
         )
 
-        self.assertEqual(matcher.thresholds[-1], 0.94)
+        self.assertEqual(matcher.thresholds[-1], 1.0)
 
     def test_mouse_api_commands_are_supported(self) -> None:
         device = DryRunDevice()

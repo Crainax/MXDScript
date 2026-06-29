@@ -32,7 +32,7 @@ class ScriptManagerTests(unittest.TestCase):
                     os.environ["LOCALAPPDATA"] = old
 
         scripts = snapshot["scripts"]
-        self.assertEqual(len(scripts), 4)
+        self.assertEqual(len(scripts), 5)
         self.assertEqual(scripts[0]["id"], "open_package")
         self.assertEqual(scripts[0]["name"], "自动开包")
         self.assertEqual(scripts[0]["defaultShortcut"], "F10")
@@ -42,6 +42,9 @@ class ScriptManagerTests(unittest.TestCase):
         self.assertEqual(scripts[2]["id"], "image_recognition")
         self.assertEqual(scripts[2]["defaultShortcut"], "")
         self.assertEqual(scripts[3]["id"], "coordinate_detector")
+        self.assertEqual(scripts[4]["id"], "coordinate_mover")
+        self.assertEqual(scripts[4]["defaultShortcut"], "")
+        self.assertEqual(scripts[4]["defaultOptions"]["moveMode"], "MoveB")
 
     def test_script_logger_uses_unique_file_per_run(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -164,6 +167,46 @@ class ScriptManagerTests(unittest.TestCase):
                 self.assertTrue(_wait_until(lambda: second_ran.is_set()))
                 self.assertTrue(_wait_until(lambda: _status(manager, "second") == "finished"))
                 time.sleep(0.1)
+            finally:
+                if old is None:
+                    os.environ.pop("LOCALAPPDATA", None)
+                else:
+                    os.environ["LOCALAPPDATA"] = old
+
+    def test_script_can_request_pause_and_resume(self) -> None:
+        pause_requested = threading.Event()
+        resumed = threading.Event()
+
+        def runner(context: ScriptRunContext) -> ScriptRunResult:
+            context.request_pause()
+            pause_requested.set()
+            context.control.wait_if_paused()
+            resumed.set()
+            return ScriptRunResult(exit_reason="completed")
+
+        definition = ScriptDefinition(
+            id="pausing_script",
+            name="Internal pause script",
+            category="test",
+            description="Tests request_pause from inside a script.",
+            module="tests.test_script_manager",
+            default_shortcut="F6",
+            runner=runner,
+        )
+
+        with tempfile.TemporaryDirectory() as appdata:
+            old = os.environ.get("LOCALAPPDATA")
+            os.environ["LOCALAPPDATA"] = appdata
+            try:
+                manager = ScriptManager((definition,))
+                manager.start("pausing_script", skip_delays=True)
+                self.assertTrue(_wait_until(lambda: pause_requested.is_set()))
+                self.assertTrue(_wait_until(lambda: _status(manager, "pausing_script") == "paused"))
+
+                manager.resume()
+
+                self.assertTrue(_wait_until(lambda: resumed.is_set()))
+                self.assertTrue(_wait_until(lambda: _status(manager, "pausing_script") == "finished"))
             finally:
                 if old is None:
                     os.environ.pop("LOCALAPPDATA", None)

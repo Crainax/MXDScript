@@ -37,22 +37,43 @@ class PositionTracker:
     position_sink: PositionSink | None = None
     window_provider: WindowProvider | None = None
     match_coordinates: CoordinateMatchFn | None = None
+    cached_miss_limit: int = 3
+    _last_position: CharacterPosition | None = None
+    _last_window_key: tuple[int, int, int, int] | None = None
+    _cached_misses: int = 0
 
     def locate(self, *, recover: bool = True) -> CharacterPosition | None:
         self.refresh_window()
+        self._reset_cache_if_window_changed()
         region = self.minimap_region()
         me, anchor = self._match_position_pair(region)
+        if me is None or anchor is None:
+            cached = self._cached_position()
+            if cached is not None:
+                return cached
+
         if me is None and recover:
             self.logger.warning("[Position] 未检测到人物坐标，尝试左右微调后重试")
             self._nudge("Left")
             region = self.minimap_region()
             me, anchor = self._match_position_pair(region)
+            if me is None or anchor is None:
+                cached = self._cached_position()
+                if cached is not None:
+                    return cached
             if me is None:
                 self._nudge("Right")
                 region = self.minimap_region()
                 me, anchor = self._match_position_pair(region)
+                if me is None or anchor is None:
+                    cached = self._cached_position()
+                    if cached is not None:
+                        return cached
             if me is None:
-                self.device.move_to(self.window.x + self.window.width // 2, self.window.y + self.window.height // 2)
+                self.device.move_to(
+                    self.window.x + self.window.width // 2,
+                    self.window.y + self.window.height // 2,
+                )
 
         if me is None or anchor is None:
             self.logger.warning(
@@ -60,6 +81,8 @@ class PositionTracker:
                 "yes" if me else "no",
                 "yes" if anchor else "no",
             )
+            self._last_position = None
+            self._cached_misses = 0
             return None
 
         position = CharacterPosition(
@@ -70,6 +93,8 @@ class PositionTracker:
             anchor_screen_x=anchor.x,
             anchor_screen_y=anchor.y,
         )
+        self._last_position = position
+        self._cached_misses = 0
         self.logger.info(
             "[Position] 人物坐标=(%s,%s) screen=(%s,%s) anchor=(%s,%s)",
             position.x,
@@ -132,3 +157,29 @@ class PositionTracker:
     def refresh_window(self) -> None:
         if self.window_provider is not None:
             self.window = self.window_provider()
+
+    def _reset_cache_if_window_changed(self) -> None:
+        window_key = (self.window.x, self.window.y, self.window.width, self.window.height)
+        if self._last_window_key is not None and self._last_window_key != window_key:
+            self._last_position = None
+            self._cached_misses = 0
+        self._last_window_key = window_key
+
+    def _cached_position(self) -> CharacterPosition | None:
+        if self._last_position is None:
+            return None
+        self._cached_misses += 1
+        if self._cached_misses >= max(1, self.cached_miss_limit):
+            self.logger.warning("[Position] 坐标连续丢失 %s 次，缓存失效", self._cached_misses)
+            self._last_position = None
+            self._cached_misses = 0
+            return None
+        self.logger.info(
+            "[Position] 本帧坐标丢失，沿用缓存坐标=(%s,%s) cached:%s",
+            self._last_position.x,
+            self._last_position.y,
+            self._cached_misses,
+        )
+        if self.position_sink is not None:
+            self.position_sink(self._last_position)
+        return self._last_position

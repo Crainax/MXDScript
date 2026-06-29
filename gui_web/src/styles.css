@@ -129,6 +129,7 @@ button {
 .button-row,
 .panel-header,
 .icon-buttons,
+.log-level-filters,
 .mode-controls,
 .toggle {
   display: flex;
@@ -401,35 +402,6 @@ h2 {
   accent-color: var(--primary-strong);
 }
 
-.daily-threshold {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 118px;
-  align-items: center;
-  gap: 12px;
-  margin-top: 12px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--button);
-  padding: 10px 12px;
-  color: var(--text);
-  font-size: 13px;
-}
-
-.daily-threshold input {
-  width: 100%;
-  height: 32px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: rgba(0, 0, 0, 0.18);
-  color: var(--text);
-  padding: 0 10px;
-  text-align: right;
-}
-
-:root[data-theme="light"] .daily-threshold input {
-  background: rgba(255, 255, 255, 0.7);
-}
-
 .debug-field {
   display: grid;
   gap: 8px;
@@ -460,6 +432,46 @@ h2 {
 
 :root[data-theme="light"] .debug-field input {
   background: rgba(255, 255, 255, 0.7);
+}
+
+.coordinate-move-panel {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+
+.coordinate-move-panel.standalone {
+  margin-top: 0;
+  border-top: 0;
+  padding-top: 0;
+}
+
+.coordinate-move-title {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.coordinate-move-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.coordinate-move-fields .debug-field {
+  margin-top: 0;
+}
+
+.coordinate-mode-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.coordinate-mode-options .daily-option {
+  margin: 0;
 }
 
 .debug-result {
@@ -636,15 +648,46 @@ button:disabled {
 
 .panel-header {
   align-items: center;
+  gap: 12px;
+  justify-content: space-between;
 }
 
 .icon-buttons {
+  flex-shrink: 0;
   gap: 8px;
 }
 
 .icon-button {
   width: 36px;
   padding: 0;
+}
+
+.log-level-filters {
+  flex: 1;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  min-width: 160px;
+}
+
+.log-level-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--button);
+  padding: 0 7px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1;
+}
+
+.log-level-filter input {
+  width: 12px;
+  height: 12px;
+  accent-color: var(--primary-strong);
 }
 
 .log-path {

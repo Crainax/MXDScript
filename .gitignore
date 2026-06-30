@@ -16,7 +16,9 @@ work/
 outputs/
 screenshots/
 captures/
-assets/
+assets/*
+!assets/app_icon.ico
+!assets/app_icon.png
 build/
 dist/
 *.spec

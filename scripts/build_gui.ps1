@@ -11,6 +11,7 @@ $VenvPython = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
 $GuiWebDir = Join-Path $ProjectRoot "gui_web"
 $DistDir = Join-Path $ProjectRoot "dist"
 $DistExe = Join-Path $DistDir "MXDScript.exe"
+$IconPath = Join-Path $ProjectRoot "assets\app_icon.ico"
 $ScoopNodeDir = Join-Path $env:USERPROFILE "scoop\apps\nodejs-lts\current"
 
 if (Test-Path $VenvPython) {
@@ -78,6 +79,15 @@ $PyInstallerArgs = @(
     "--add-data", "$(Join-Path $ProjectRoot "assets");assets",
     (Join-Path $ProjectRoot "src\mhscript_yjs\gui\web_app.py")
 )
+
+if (Test-Path $IconPath) {
+    $InsertAt = $PyInstallerArgs.Count - 1
+    $PyInstallerArgs = @(
+        $PyInstallerArgs[0..($InsertAt - 1)] +
+        @("--icon", $IconPath) +
+        $PyInstallerArgs[$InsertAt]
+    )
+}
 
 $DllPath = Join-Path $ProjectRoot "vendor\msdk\msdk.dll"
 if (Test-Path $DllPath) {

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
+import sys
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -50,6 +53,11 @@ COORDINATE_PIXEL_COLOR_TOLERANCE = 18
 COORDINATE_PIXEL_ALLOWED_BAD_PIXELS = 2
 FAST_CLICK_HOLD_MS = 18
 FAST_MULTI_CLICK_INTERVAL_MS = 35
+BEIJING_TIMEZONE = timezone(timedelta(hours=8))
+HD_REWARD_CHOICE_KEYS = {1: ord("1"), 2: ord("2")}
+HD_REWARD_KEY_POLL_MS = 50
+HD_REWARD_CLAIM_MAX_CLICKS = 10
+HD_REWARD_BUTTON_NEAR_PX = 48
 
 
 @dataclass(frozen=True)
@@ -57,6 +65,78 @@ class DailyScriptResult:
     exit_reason: str
     steps: int
     modules: dict[str, str] = field(default_factory=dict)
+
+
+def _user32() -> Any | None:
+    if sys.platform != "win32":
+        return None
+    import ctypes
+
+    return ctypes.WinDLL("user32", use_last_error=True)
+
+
+def _key_is_pressed(vk_code: int) -> bool:
+    user32 = _user32()
+    if user32 is None:
+        return False
+    return bool(user32.GetAsyncKeyState(int(vk_code)) & 0x8000)
+
+
+def _set_foreground_window(hwnd: int) -> bool:
+    user32 = _user32()
+    if user32 is None or hwnd <= 0:
+        return False
+    user32.ShowWindow(int(hwnd), 9)
+    return bool(user32.SetForegroundWindow(int(hwnd)))
+
+
+def _find_current_process_foreground_target(excluded_hwnd: int) -> int | None:
+    user32 = _user32()
+    if user32 is None:
+        return None
+    import ctypes
+    from ctypes import wintypes
+
+    current_pid = os.getpid()
+    matches: list[int] = []
+    enum_windows_proc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+
+    @enum_windows_proc
+    def enum_proc(hwnd: int, lparam: int) -> bool:
+        if int(hwnd) == int(excluded_hwnd) or not user32.IsWindowVisible(hwnd):
+            return True
+        length = user32.GetWindowTextLengthW(hwnd)
+        if length <= 0:
+            return True
+        pid = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        if int(pid.value) == current_pid:
+            matches.append(int(hwnd))
+            return False
+        return True
+
+    user32.EnumWindows(enum_proc, 0)
+    return matches[0] if matches else None
+
+
+def _defocus_window(hwnd: int) -> bool:
+    user32 = _user32()
+    if user32 is None:
+        return False
+    current = int(user32.GetForegroundWindow())
+    if current != int(hwnd):
+        return True
+
+    target = _find_current_process_foreground_target(hwnd)
+    if target is None:
+        shell_hwnd = int(user32.GetShellWindow())
+        target = shell_hwnd if shell_hwnd and shell_hwnd != int(hwnd) else None
+    if target is None:
+        desktop_hwnd = int(user32.GetDesktopWindow())
+        target = desktop_hwnd if desktop_hwnd and desktop_hwnd != int(hwnd) else None
+    if target is None:
+        return False
+    return bool(user32.SetForegroundWindow(target))
 
 
 class DailyRunner:
@@ -819,27 +899,33 @@ class DailyRunner:
                 if self._find_ok_button():
                     log_important(
                         self.logger,
-                        "[HDDaily] Monthly HD rewards completed, pressing Enter",
+                        "[HD日常] 本月 HD 奖励已领取完毕，按 Enter 确认",
                     )
                     self.device.press_key(keycode("Enter"), 1)
                     self.sleeper.delay_random_ms(139, 142)
                     self._close_hd_interface(
-                        "[HDDaily] HD interface closed, monthly rewards completed"
+                        "[HD日常] HD 界面已关闭，本月奖励已完成"
                     )
                     break
 
                 attempts = 0
-                while attempts < 2:
+                attempt_limit = self._hd_reward_attempt_limit()
+                log_important(
+                    self.logger,
+                    "[HD日常] 今日奖励处理次数：%s",
+                    attempt_limit,
+                )
+                while attempts < attempt_limit:
                     self.sleeper.delay_random_ms(200, 300)
                     if self._find_ok_button():
                         log_important(
                             self.logger,
-                            "[HDDaily] Monthly HD rewards completed, pressing Enter",
+                            "[HD日常] 本月 HD 奖励已领取完毕，按 Enter 确认",
                         )
                         self.device.press_key(keycode("Enter"), 1)
                         self.sleeper.delay_random_ms(139, 142)
 
-                    log_important(self.logger, "[HDDaily] HDMark found, clicking offset position")
+                    log_important(self.logger, "[HD日常] 已找到 HDMark，点击奖励入口")
                     self.device.move_to(
                         round(float(self.vars["logoX"])) + 290,
                         round(float(self.vars["logoY"])) + 52,
@@ -853,13 +939,13 @@ class DailyRunner:
                     attempts += 1
                     log_important(
                         self.logger,
-                        "[HDDaily] Gift processing attempt %s completed",
+                        "[HD日常] 第 %s 次奖励处理已完成",
                         attempts,
                     )
                     self.sleeper.delay_random_ms(500, 800)
 
-                log_important(self.logger, "[HDDaily] Closing HD interface")
-                self._close_hd_interface("[HDDaily] HD interface closed successfully")
+                log_important(self.logger, "[HD日常] 正在关闭 HD 界面")
+                self._close_hd_interface("[HD日常] HD 界面已成功关闭")
                 break
 
             if self._find_pic(
@@ -886,33 +972,33 @@ class DailyRunner:
             self._find_hd_image("Mark2.bmp")
 
         if self.vars.get("intX", -1) >= 0:
-            log_important(self.logger, "[HDDaily] Mark2 detected, checking for gift")
+            log_important(self.logger, "[HD日常] 已进入奖励选择界面，检查是否有礼物")
             if self._find_hd_image("Gift.bmp"):
-                log_important(self.logger, "[HDDaily] Gift detected, closing interface directly")
+                log_important(self.logger, "[HD日常] 检测到礼物，直接关闭界面")
                 self._close_hd_interface(
-                    "[HDDaily] HD interface closed, gift processing completed"
+                    "[HD日常] HD 界面已关闭，礼物处理完成"
                 )
                 return True
-            self._pause_for_hd_reward_selection("[HDDaily] No gift found, playing warning sound")
-            return False
+            return self._pause_for_hd_reward_selection(
+                "[HD日常] 未检测到礼物，播放提示音并等待选择"
+            )
 
         if self._find_hd_image("Gift.bmp"):
-            log_important(self.logger, "[HDDaily] Gift detected, closing interface directly")
-            self._close_hd_interface("[HDDaily] HD interface closed, gift processing completed")
+            log_important(self.logger, "[HD日常] 检测到礼物，直接关闭界面")
+            self._close_hd_interface("[HD日常] HD 界面已关闭，礼物处理完成")
             return True
 
         if self._find_ok_button():
-            log_important(self.logger, "[HDDaily] OK button found, pressing Enter")
+            log_important(self.logger, "[HD日常] 检测到确认按钮，按 Enter")
             self.device.press_key(keycode("Enter"), 1)
             self.sleeper.delay_random_ms(139, 142)
-            log_important(self.logger, "[HDDaily] Closing HD interface")
-            self._close_hd_interface("[HDDaily] HD interface closed successfully")
+            log_important(self.logger, "[HD日常] 正在关闭 HD 界面")
+            self._close_hd_interface("[HD日常] HD 界面已成功关闭")
             return True
 
-        self._pause_for_hd_reward_selection(
-            "[HDDaily] Reward state not recognized; waiting for manual selection"
+        return self._pause_for_hd_reward_selection(
+            "[HD日常] 未识别奖励状态，等待手动选择"
         )
-        return False
 
     def _find_hd_image(
         self,
@@ -946,15 +1032,139 @@ class DailyRunner:
                 log_important(self.logger, success_message)
                 break
 
-    def _pause_for_hd_reward_selection(self, message: str) -> None:
+    def _pause_for_hd_reward_selection(self, message: str) -> bool:
         log_important(self.logger, message)
         self._play_hd_reward_alert()
-        self._pause_from_script("[HDDaily] Script paused for manual reward selection")
+        choice = self._wait_for_hd_reward_choice()
+        if self._claim_hd_reward(choice):
+            return False
+        log_important(
+            self.logger,
+            "[HD日常] 领取按钮点击 %s 次后仍未消失，跳过本次 HD 日常",
+            HD_REWARD_CLAIM_MAX_CLICKS,
+        )
+        self._close_hd_interface("[HD日常] 领取异常后已关闭 HD 界面")
+        return True
 
     def _play_hd_reward_alert(self) -> None:
         for frequency in (523, 698, 523, 698):
             play_beep(frequency, 120, logger=self.logger, sync=True)
         message_beep(logger=self.logger)
+
+    def _hd_reward_attempt_limit(self) -> int:
+        return 2 if self._is_beijing_sunday() else 1
+
+    def _is_beijing_sunday(self) -> bool:
+        return datetime.now(BEIJING_TIMEZONE).isoweekday() == 7
+
+    def _wait_for_hd_reward_choice(self) -> int:
+        self._defocus_maple_window_for_hd_choice()
+        try:
+            log_important(
+                self.logger,
+                "[HD日常] 等待键盘选择：按 1 领取左侧奖励，按 2 领取右侧奖励",
+            )
+            self._wait_until_hd_choice_keys_released()
+            while True:
+                self._checkpoint()
+                choice = self._poll_hd_reward_choice_key()
+                if choice is not None:
+                    self._wait_until_hd_choice_key_released(choice)
+                    log_important(self.logger, "[HD日常] 已收到奖励选择：%s", choice)
+                    return choice
+                self.sleeper.delay_ms(HD_REWARD_KEY_POLL_MS)
+        finally:
+            self._focus_maple_window_after_hd_choice()
+
+    def _poll_hd_reward_choice_key(self) -> int | None:
+        for choice, vk_code in HD_REWARD_CHOICE_KEYS.items():
+            if _key_is_pressed(vk_code):
+                return choice
+        return None
+
+    def _wait_until_hd_choice_keys_released(self) -> None:
+        while any(_key_is_pressed(vk_code) for vk_code in HD_REWARD_CHOICE_KEYS.values()):
+            self._checkpoint()
+            self.sleeper.delay_ms(HD_REWARD_KEY_POLL_MS)
+
+    def _wait_until_hd_choice_key_released(self, choice: int) -> None:
+        vk_code = HD_REWARD_CHOICE_KEYS[choice]
+        while _key_is_pressed(vk_code):
+            self._checkpoint()
+            self.sleeper.delay_ms(HD_REWARD_KEY_POLL_MS)
+
+    def _defocus_maple_window_for_hd_choice(self) -> None:
+        window = self._current_window_info()
+        if _defocus_window(window.hwnd):
+            self.logger.info("[HD日常] 选择奖励前已移出游戏窗口焦点")
+            return
+        self.logger.warning("[HD日常] 选择奖励前未能移出游戏窗口焦点")
+
+    def _focus_maple_window_after_hd_choice(self) -> None:
+        window = self._current_window_info()
+        if _set_foreground_window(window.hwnd):
+            self.logger.info("[HD日常] 选择奖励后已恢复游戏窗口焦点")
+            self.sleeper.delay_ms(100)
+            return
+        self.logger.warning("[HD日常] 选择奖励后未能恢复游戏窗口焦点")
+
+    def _claim_hd_reward(self, choice: int) -> bool:
+        target: tuple[int, int] | None = None
+        for attempt in range(1, HD_REWARD_CLAIM_MAX_CLICKS + 1):
+            button = (
+                self._find_hd_claim_button_near(target)
+                if target is not None
+                else self._find_hd_claim_button_for_choice(choice)
+            )
+            if button is None:
+                return target is not None
+
+            target = (button.center_x, button.center_y)
+            log_important(
+                self.logger,
+                "[HD日常] 正在领取选择 %s，第 %s/%s 次点击",
+                choice,
+                attempt,
+                HD_REWARD_CLAIM_MAX_CLICKS,
+            )
+            self._click_hd_claim_button(button)
+            self.sleeper.delay_ms(250)
+            if self._find_hd_claim_button_near(target) is None:
+                log_important(self.logger, "[HD日常] 选择 %s 的奖励领取成功", choice)
+                return True
+        return False
+
+    def _find_hd_claim_button_for_choice(self, choice: int) -> MatchResult | None:
+        buttons = sorted(
+            self._match_hd_claim_buttons(),
+            key=lambda item: (item.center_x, item.center_y),
+        )
+        if not buttons:
+            return None
+        return buttons[0] if choice == 1 else buttons[-1]
+
+    def _find_hd_claim_button_near(self, target: tuple[int, int] | None) -> MatchResult | None:
+        if target is None:
+            return None
+        target_x, target_y = target
+        for button in self._match_hd_claim_buttons():
+            if (
+                abs(button.center_x - target_x) <= HD_REWARD_BUTTON_NEAR_PX
+                and abs(button.center_y - target_y) <= HD_REWARD_BUTTON_NEAR_PX
+            ):
+                return button
+        return None
+
+    def _match_hd_claim_buttons(self) -> list[MatchResult]:
+        return self._match_combine_main_images("HD领取按钮", "claimButton.png", limit=20)
+
+    def _click_hd_claim_button(self, button: MatchResult) -> None:
+        self.logger.info("[HD日常] 点击领取按钮 x=%s y=%s", button.center_x, button.center_y)
+        self.device.move_to(button.center_x, button.center_y)
+        self.sleeper.delay_ms(50)
+        self._left_click(1)
+        self.sleeper.delay_ms(120)
+        self._move_mouse_nearby(button.center_x, button.center_y)
 
     def _receive_daily_quest(self) -> str:
         log_important(self.logger, "[ReceiveQuest] 开始接取每日任务")
@@ -1120,6 +1330,31 @@ class DailyRunner:
                 match.score,
             )
         return match
+
+    def _match_combine_main_images(
+        self,
+        name: str,
+        filename: str,
+        *,
+        region: Region | None = None,
+        limit: int = 20,
+    ) -> list[MatchResult]:
+        self._checkpoint()
+        paths = (self._resolve_image_path(fr"CombineMain\{filename}"),)
+        group = ImageGroup(
+            name=name,
+            paths=paths,
+            threshold=DAILY_MATCH_THRESHOLD,
+        )
+        target_region = region or self._region("x1", "y1", "xEnd", "yEnd")
+        match_all = getattr(self.matcher, "match_all", None)
+        if callable(match_all):
+            matches = list(match_all(group, target_region, limit=limit))
+        else:
+            match = self.matcher.match_any(group, target_region)
+            matches = [match] if match is not None else []
+        self.logger.info("[HD日常] 检测到 %s 数量=%s", name, len(matches))
+        return matches
 
     def _click_match(self, match: MatchResult, label: str) -> None:
         x = match.center_x

@@ -38,6 +38,7 @@ class FakeMatcher:
 @dataclass
 class SequenceMatcher:
     matches: dict[str, list[bool]]
+    all_matches: dict[str, list[list[MatchResult]]] = field(default_factory=dict)
     calls: list[str] = field(default_factory=list)
     thresholds: list[float] = field(default_factory=list)
     regions: list[Region] = field(default_factory=list)
@@ -59,6 +60,14 @@ class SequenceMatcher:
             height=20,
             score=1.0,
         )
+
+    def match_all(self, group: ImageGroup, region: Region, *, limit: int = 200) -> list[MatchResult]:
+        self.calls.append(group.name)
+        self.thresholds.append(group.threshold)
+        self.regions.append(region)
+        sequence = self.all_matches.setdefault(group.name, [])
+        matches = sequence.pop(0) if sequence else []
+        return matches[:limit]
 
 
 @dataclass
@@ -246,17 +255,37 @@ class DailyScriptTests(unittest.TestCase):
 
         self.assertEqual(matcher.regions[-1], Region.from_bounds(21, 1719, 1387, 2487))
 
-    def test_hd_daily_pauses_when_reward_state_is_not_recognized(self) -> None:
+    def test_hd_daily_claims_keyboard_selected_right_reward(self) -> None:
         pause_requests: list[str] = []
+        left_button = MatchResult(
+            group="HD领取按钮",
+            image_path=Path("claimButton.png"),
+            x=120,
+            y=410,
+            width=24,
+            height=12,
+            score=1.0,
+        )
+        right_button = MatchResult(
+            group="HD领取按钮",
+            image_path=Path("claimButton.png"),
+            x=300,
+            y=410,
+            width=24,
+            height=12,
+            score=1.0,
+        )
+        device = DryRunDevice()
         runner = DailyRunner(
             config=load_config(load_local=False),
-            device=DryRunDevice(),
+            device=device,
             matcher=SequenceMatcher(
                 {
                     "Mark2.bmp": [False, False],
                     "Gift.bmp": [False],
                     "OK.bmp": [False],
-                }
+                },
+                all_matches={"HD领取按钮": [[left_button, right_button], []]},
             ),  # type: ignore[arg-type]
             sleeper=NullSleeper(),
             logger=logging.getLogger("test.daily_script"),
@@ -272,11 +301,143 @@ class DailyScriptTests(unittest.TestCase):
         )
         runner._initialize_window()  # noqa: SLF001
         runner._play_hd_reward_alert = lambda: None  # type: ignore[method-assign]  # noqa: SLF001
+        runner._wait_for_hd_reward_choice = lambda: 2  # type: ignore[method-assign]  # noqa: SLF001
 
         handled = runner._handle_hd_reward_after_click()  # noqa: SLF001
 
         self.assertFalse(handled)
-        self.assertEqual(pause_requests, ["pause"])
+        self.assertEqual(pause_requests, [])
+        self.assertEqual(device.actions[0].name, "move_to")
+        self.assertEqual(
+            device.actions[0].args,
+            (right_button.center_x, right_button.center_y, True),
+        )
+
+    def test_hd_daily_claim_failure_closes_and_skips_hddaily(self) -> None:
+        left_button = MatchResult(
+            group="HD领取按钮",
+            image_path=Path("claimButton.png"),
+            x=120,
+            y=410,
+            width=24,
+            height=12,
+            score=1.0,
+        )
+        right_button = MatchResult(
+            group="HD领取按钮",
+            image_path=Path("claimButton.png"),
+            x=300,
+            y=410,
+            width=24,
+            height=12,
+            score=1.0,
+        )
+        device = DryRunDevice()
+        runner = DailyRunner(
+            config=load_config(load_local=False),
+            device=device,
+            matcher=SequenceMatcher(
+                {
+                    "Mark2.bmp": [False, False],
+                    "Gift.bmp": [False],
+                    "OK.bmp": [False],
+                    "HDMark.bmp": [True, False],
+                },
+                all_matches={
+                    "HD领取按钮": [[left_button, right_button] for _ in range(20)]
+                },
+            ),  # type: ignore[arg-type]
+            sleeper=NullSleeper(),
+            logger=logging.getLogger("test.daily_script"),
+            window_info=WindowInfo(
+                hwnd=100,
+                title="MapleStory",
+                x=21,
+                y=1719,
+                width=1366,
+                height=768,
+            ),
+        )
+        runner._initialize_window()  # noqa: SLF001
+        runner._play_hd_reward_alert = lambda: None  # type: ignore[method-assign]  # noqa: SLF001
+        runner._wait_for_hd_reward_choice = lambda: 1  # type: ignore[method-assign]  # noqa: SLF001
+
+        handled = runner._handle_hd_reward_after_click()  # noqa: SLF001
+
+        self.assertTrue(handled)
+        self.assertEqual(sum(1 for action in device.actions if action.name == "left_click"), 10)
+        self.assertIn(
+            ("press_key", (27, 1)),
+            [(action.name, action.args) for action in device.actions],
+        )
+
+    def test_hd_daily_attempt_limit_uses_beijing_sunday(self) -> None:
+        runner = DailyRunner(
+            config=load_config(load_local=False),
+            device=DryRunDevice(),
+            matcher=FakeMatcher(),  # type: ignore[arg-type]
+            sleeper=NullSleeper(),
+            logger=logging.getLogger("test.daily_script"),
+            window_info=WindowInfo(hwnd=100, title="MapleStory", x=10, y=20, width=800, height=600),
+        )
+
+        runner._is_beijing_sunday = lambda: False  # type: ignore[method-assign]  # noqa: SLF001
+        self.assertEqual(runner._hd_reward_attempt_limit(), 1)  # noqa: SLF001
+
+        runner._is_beijing_sunday = lambda: True  # type: ignore[method-assign]  # noqa: SLF001
+        self.assertEqual(runner._hd_reward_attempt_limit(), 2)  # noqa: SLF001
+
+    def test_hd_daily_runs_one_reward_attempt_when_not_sunday(self) -> None:
+        device = DryRunDevice()
+        runner = DailyRunner(
+            config=load_config(load_local=False),
+            device=device,
+            matcher=SequenceMatcher(
+                {
+                    "HDMark.bmp": [True, False],
+                    "OK.bmp": [False, False],
+                }
+            ),  # type: ignore[arg-type]
+            sleeper=NullSleeper(),
+            logger=logging.getLogger("test.daily_script"),
+            window_info=WindowInfo(hwnd=100, title="MapleStory", x=10, y=20, width=800, height=600),
+        )
+        runner._initialize_window()  # noqa: SLF001
+        runner._hd_reward_attempt_limit = lambda: 1  # type: ignore[method-assign]  # noqa: SLF001
+        handle_calls: list[str] = []
+        runner._handle_hd_reward_after_click = (  # type: ignore[method-assign]  # noqa: SLF001
+            lambda: handle_calls.append("handle") or False
+        )
+
+        runner._run_hd_daily()  # noqa: SLF001
+
+        self.assertEqual(handle_calls, ["handle"])
+
+    def test_hd_daily_runs_two_reward_attempts_on_sunday(self) -> None:
+        device = DryRunDevice()
+        runner = DailyRunner(
+            config=load_config(load_local=False),
+            device=device,
+            matcher=SequenceMatcher(
+                {
+                    "HDMark.bmp": [True, False],
+                    "OK.bmp": [False, False, False],
+                }
+            ),  # type: ignore[arg-type]
+            sleeper=NullSleeper(),
+            logger=logging.getLogger("test.daily_script"),
+            window_info=WindowInfo(hwnd=100, title="MapleStory", x=10, y=20, width=800, height=600),
+        )
+        runner._initialize_window()  # noqa: SLF001
+        runner._hd_reward_attempt_limit = lambda: 2  # type: ignore[method-assign]  # noqa: SLF001
+        handle_calls: list[str] = []
+        runner._handle_hd_reward_after_click = (  # type: ignore[method-assign]  # noqa: SLF001
+            lambda: handle_calls.append("handle") or False
+        )
+
+        runner._run_hd_daily()  # noqa: SLF001
+
+        self.assertEqual(handle_calls, ["handle", "handle"])
 
     def test_receive_daily_quest_opens_scheduler_clicks_receive_and_closes(self) -> None:
         device = DryRunDevice()

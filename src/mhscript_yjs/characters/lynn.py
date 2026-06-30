@@ -103,12 +103,7 @@ class LynnController(CharacterController):
         self.actions.hold("F", 103)
         self.actions.delay(325)
 
-    def move_up(self, position: CharacterPosition, target: MoveTarget) -> None:
-        stable = self._stable()
-        if stable is None or stable.y != position.y:
-            self.logger.info("[MoveUp] Y 轴未稳定，跳过本次上移")
-            return
-
+    def move_up(self, position: CharacterPosition, target: MoveTarget) -> CharacterPosition | None:
         if position.y > target.y + 40:
             self.actions.delay_random(15, 25)
             self.actions.key_down("Up")
@@ -124,10 +119,20 @@ class LynnController(CharacterController):
             self.actions.delay(104)
             self.actions.delay(401)
             self.actions.hold("LAlt", 89)
-            self.actions.delay(1363)
-        elif position.y > target.y + 18:
+            return self._wait_vertical_settle(
+                position,
+                target,
+                direction="up",
+                timeout_ms=1900,
+            )
+        elif position.y > target.y + 32:
             self.actions.hold_random("LAlt", 69, 70)
-            self.actions.delay_random(921, 931)
+            return self._wait_vertical_settle(
+                position,
+                target,
+                direction="up",
+                timeout_ms=1450,
+            )
         else:
             self.actions.delay_random(78, 79)
             self.actions.key_down("Up")
@@ -141,7 +146,12 @@ class LynnController(CharacterController):
                 self.actions.key_up("Up")
             self.actions.delay_random(160, 162)
             self.actions.delay_random(95, 96)
-            self.actions.delay_random(553, 559)
+            return self._wait_vertical_settle(
+                position,
+                target,
+                direction="up",
+                timeout_ms=1300,
+            )
 
     def stand_attack(self) -> None:
         now = self.now()

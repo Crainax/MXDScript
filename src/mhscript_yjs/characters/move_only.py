@@ -40,15 +40,20 @@ class MoveOnlyController(CharacterController):
         self.actions.delay_random(41, 42)
         self.actions.delay_random(256, 261)
 
-    def move_up(self, position: CharacterPosition, target: MoveTarget) -> None:
-        stable = self._stable()
-        if stable is None or stable.y != position.y:
-            self.logger.info("[MoveOnly] Y 轴未稳定，跳过本次上移")
-            return
-
+    def move_up(self, position: CharacterPosition, target: MoveTarget) -> CharacterPosition | None:
         if position.y > target.y + 25:
             self.actions.hold_random("Alt", 69, 70)
-            self.actions.delay_random(921, 931)
+            return self._wait_vertical_settle(
+                position,
+                target,
+                direction="up",
+                timeout_ms=1450,
+            )
         else:
             self.actions.hold_random("LAlt", 143, 145)
-            self.actions.delay_random(769, 777)
+            return self._wait_vertical_settle(
+                position,
+                target,
+                direction="up",
+                timeout_ms=1250,
+            )

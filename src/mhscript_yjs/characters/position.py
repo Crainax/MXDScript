@@ -39,15 +39,19 @@ class PositionTracker:
     match_coordinates: CoordinateMatchFn | None = None
     cached_miss_limit: int = 3
     _last_position: CharacterPosition | None = None
+    _last_anchor: MatchResult | None = None
     _last_window_key: tuple[int, int, int, int] | None = None
     _cached_misses: int = 0
 
-    def locate(self, *, recover: bool = True) -> CharacterPosition | None:
+    def locate(self, *, recover: bool = True, use_cache: bool = True) -> CharacterPosition | None:
         self.refresh_window()
         self._reset_cache_if_window_changed()
         region = self.minimap_region()
-        me, anchor = self._match_position_pair(region)
-        if me is None or anchor is None:
+        me, anchor = self._match_position_pair(
+            region,
+            use_cached_anchor=not recover and not use_cache,
+        )
+        if use_cache and (me is None or anchor is None):
             cached = self._cached_position()
             if cached is not None:
                 return cached
@@ -57,7 +61,7 @@ class PositionTracker:
             self._nudge("Left")
             region = self.minimap_region()
             me, anchor = self._match_position_pair(region)
-            if me is None or anchor is None:
+            if use_cache and (me is None or anchor is None):
                 cached = self._cached_position()
                 if cached is not None:
                     return cached
@@ -65,7 +69,7 @@ class PositionTracker:
                 self._nudge("Right")
                 region = self.minimap_region()
                 me, anchor = self._match_position_pair(region)
-                if me is None or anchor is None:
+                if use_cache and (me is None or anchor is None):
                     cached = self._cached_position()
                     if cached is not None:
                         return cached
@@ -81,8 +85,9 @@ class PositionTracker:
                 "yes" if me else "no",
                 "yes" if anchor else "no",
             )
-            self._last_position = None
-            self._cached_misses = 0
+            if use_cache:
+                self._last_position = None
+                self._cached_misses = 0
             return None
 
         position = CharacterPosition(
@@ -94,6 +99,7 @@ class PositionTracker:
             anchor_screen_y=anchor.y,
         )
         self._last_position = position
+        self._last_anchor = anchor
         self._cached_misses = 0
         self.logger.info(
             "[Position] 人物坐标=(%s,%s) screen=(%s,%s) anchor=(%s,%s)",
@@ -126,10 +132,21 @@ class PositionTracker:
             self.window.bottom,
         )
 
-    def _match_position_pair(self, region: Region) -> tuple[MatchResult | None, MatchResult | None]:
+    def _match_position_pair(
+        self,
+        region: Region,
+        *,
+        use_cached_anchor: bool = False,
+    ) -> tuple[MatchResult | None, MatchResult | None]:
+        if use_cached_anchor and self._last_anchor is not None:
+            return self._match_me(region), self._last_anchor
         if self.match_coordinates is not None:
-            return self.match_coordinates(region, 1.0)
-        return self._match_me(region), self._match_anchor(region)
+            me, anchor = self.match_coordinates(region, 1.0)
+        else:
+            me, anchor = self._match_me(region), self._match_anchor(region)
+        if anchor is not None:
+            self._last_anchor = anchor
+        return me, anchor
 
     def _match_me(self, region: Region) -> MatchResult | None:
         return self.match_image(
@@ -162,6 +179,7 @@ class PositionTracker:
         window_key = (self.window.x, self.window.y, self.window.width, self.window.height)
         if self._last_window_key is not None and self._last_window_key != window_key:
             self._last_position = None
+            self._last_anchor = None
             self._cached_misses = 0
         self._last_window_key = window_key
 

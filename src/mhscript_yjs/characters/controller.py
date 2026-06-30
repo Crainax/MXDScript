@@ -25,8 +25,8 @@ class CharacterController:
         self.static_position = None
         self.static_count = 0
 
-    def locate(self, *, recover: bool = True) -> CharacterPosition | None:
-        return self.tracker.locate(recover=recover)
+    def locate(self, *, recover: bool = True, use_cache: bool = True) -> CharacterPosition | None:
+        return self.tracker.locate(recover=recover, use_cache=use_cache)
 
     def move_to(self, target: MoveTarget) -> MoveResult:
         log_important(
@@ -76,10 +76,14 @@ class CharacterController:
                 self.actions.hold("Left", duration)
             elif position.y < target.y - target.y_tolerance:
                 self.logger.info("[Move] 动作=向下移动")
-                self.move_down(position, target)
+                moved_position = self.move_down(position, target)
+                if moved_position is not None:
+                    last_position = moved_position
             elif position.y > target.y + target.y_tolerance:
                 self.logger.info("[Move] 动作=向上移动")
-                self.move_up(position, target)
+                moved_position = self.move_up(position, target)
+                if moved_position is not None:
+                    last_position = moved_position
             else:
                 log_important(
                     self.logger,
@@ -110,13 +114,10 @@ class CharacterController:
     def move_left_long(self, position: CharacterPosition, target: MoveTarget) -> None:
         raise NotImplementedError
 
-    def move_up(self, position: CharacterPosition, target: MoveTarget) -> None:
+    def move_up(self, position: CharacterPosition, target: MoveTarget) -> CharacterPosition | None:
         raise NotImplementedError
 
-    def move_down(self, position: CharacterPosition, target: MoveTarget) -> None:
-        if not self._stable_big(position.y):
-            self.logger.info("[MoveDown] Y 轴仍在变化，跳过本次下跳")
-            return
+    def move_down(self, position: CharacterPosition, target: MoveTarget) -> CharacterPosition | None:
         self.logger.info("[MoveDown] Down+Space 下跳，当前Y=%s 目标Y=%s", position.y, target.y)
         self.actions.key_down("Down")
         space_down = False
@@ -133,7 +134,21 @@ class CharacterController:
                 self.actions.key_up("Space")
                 self.actions.delay_random(66, 67)
             self.actions.key_up("Down")
-        self.actions.delay_random(548, 554)
+        return self._wait_vertical_settle(
+            position,
+            target,
+            direction="down",
+            timeout_ms=self._down_settle_timeout_ms(position, target),
+        )
+
+    def wait_stable_big(self, current_y: int | None = None) -> bool:
+        position_y = current_y
+        if position_y is None:
+            position = self.locate(recover=True)
+            if position is None:
+                return False
+            position_y = position.y
+        return self._stable_big(position_y)
 
     def _stable(self) -> CharacterPosition | None:
         while True:
@@ -164,6 +179,100 @@ class CharacterController:
                 return False
             self.actions.delay(2)
         return True
+
+    def _wait_vertical_settle(
+        self,
+        start: CharacterPosition,
+        target: MoveTarget,
+        *,
+        direction: str,
+        timeout_ms: int,
+        poll_ms: int = 35,
+        stable_samples: int = 3,
+        unchanged_grace_ms: int = 260,
+    ) -> CharacterPosition | None:
+        started_at = self.now()
+        deadline = started_at + max(1, timeout_ms) / 1000
+        last_y: int | None = None
+        stable_count = 0
+        moved = False
+        rebound = False
+        best = start
+
+        while self.now() < deadline:
+            self.actions.delay(poll_ms)
+            current = self.locate(recover=False, use_cache=False)
+            if current is None:
+                continue
+
+            best = current
+            elapsed_ms = int((self.now() - started_at) * 1000)
+            if direction == "up":
+                if current.y < start.y:
+                    moved = True
+                if moved and last_y is not None and current.y > last_y:
+                    rebound = True
+            else:
+                if current.y > start.y:
+                    moved = True
+
+            if current.y == last_y:
+                stable_count += 1
+            else:
+                last_y = current.y
+                stable_count = 1
+
+            if stable_count < stable_samples:
+                continue
+            if not moved:
+                if elapsed_ms >= unchanged_grace_ms:
+                    self.logger.info(
+                        "[MoveVertical] no_y_change direction=%s y=%s elapsed_ms=%s",
+                        direction,
+                        current.y,
+                        elapsed_ms,
+                    )
+                    return current
+                continue
+            if direction == "up" and self._upward_peak_without_landing(current, target, rebound):
+                continue
+
+            self.logger.info(
+                "[MoveVertical] settled direction=%s start_y=%s current_y=%s target_y=%s elapsed_ms=%s",
+                direction,
+                start.y,
+                current.y,
+                target.y,
+                elapsed_ms,
+            )
+            return current
+
+        self.logger.info(
+            "[MoveVertical] timeout direction=%s start_y=%s best_y=%s target_y=%s timeout_ms=%s",
+            direction,
+            start.y,
+            best.y,
+            target.y,
+            timeout_ms,
+        )
+        return best
+
+    def _upward_peak_without_landing(
+        self,
+        current: CharacterPosition,
+        target: MoveTarget,
+        rebound: bool,
+    ) -> bool:
+        tolerance = max(target.y_tolerance, 0)
+        if rebound:
+            return False
+        if abs(current.y - target.y) <= tolerance:
+            return False
+        return current.y < target.y - tolerance
+
+    def _down_settle_timeout_ms(self, position: CharacterPosition, target: MoveTarget) -> int:
+        distance = max(0, target.y - position.y)
+        return _clamp(distance * 45 + 500, 800, 1800)
 
     def _anti_jam(self, position: CharacterPosition) -> None:
         if self.static_position and self.static_position.x == position.x and self.static_position.y == position.y:

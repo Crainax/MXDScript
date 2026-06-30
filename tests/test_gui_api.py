@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import os
+import json
 import tempfile
 import unittest
 from pathlib import Path
 
 from mhscript_yjs.gui.api import GuiApi
+from mhscript_yjs.runtime.app_paths import settings_path
 
 
 class GuiApiTests(unittest.TestCase):
@@ -16,7 +18,9 @@ class GuiApiTests(unittest.TestCase):
         self.assertTrue(state["ok"])
         self.assertEqual(state["app"]["title"], "MXD脚本库")
         self.assertEqual(state["runtime"]["logDir"], str(appdata / "MXDScriptLibrary" / "logs"))
-        self.assertEqual(len(state["runtime"]["scripts"]), 5)
+        self.assertEqual(len(state["runtime"]["scripts"]), 6)
+        self.assertEqual(state["settings"]["shortcuts"]["leveling"], "Ctrl+F10")
+        self.assertEqual(state["settings"]["shortcuts"]["open_package"], "")
 
     def test_save_shortcuts_rejects_escape(self) -> None:
         with _temporary_local_appdata():
@@ -32,6 +36,31 @@ class GuiApiTests(unittest.TestCase):
             state = api.get_state()
 
         self.assertTrue(response["ok"])
+        self.assertEqual(state["settings"]["shortcuts"]["open_package"], "")
+
+    def test_legacy_open_package_f10_default_is_migrated_to_empty(self) -> None:
+        with _temporary_local_appdata():
+            path = settings_path()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(
+                json.dumps({"shortcuts": {"open_package": "F10"}}),
+                encoding="utf-8",
+            )
+            state = GuiApi().get_state()
+
+        self.assertEqual(state["settings"]["shortcuts"]["open_package"], "")
+
+    def test_duplicate_saved_shortcut_keeps_first_script_and_clears_later_one(self) -> None:
+        with _temporary_local_appdata():
+            path = settings_path()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(
+                json.dumps({"shortcuts": {"open_package": "Ctrl+F10"}}),
+                encoding="utf-8",
+            )
+            state = GuiApi().get_state()
+
+        self.assertEqual(state["settings"]["shortcuts"]["leveling"], "Ctrl+F10")
         self.assertEqual(state["settings"]["shortcuts"]["open_package"], "")
 
     def test_save_run_options_persists_hotkey_runtime_mode(self) -> None:

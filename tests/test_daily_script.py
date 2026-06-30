@@ -40,10 +40,12 @@ class SequenceMatcher:
     matches: dict[str, list[bool]]
     calls: list[str] = field(default_factory=list)
     thresholds: list[float] = field(default_factory=list)
+    regions: list[Region] = field(default_factory=list)
 
     def match_any(self, group: ImageGroup, region: Region) -> MatchResult | None:
         self.calls.append(group.name)
         self.thresholds.append(group.threshold)
+        self.regions.append(region)
         sequence = self.matches.setdefault(group.name, [])
         matched = sequence.pop(0) if sequence else False
         if not matched:
@@ -170,7 +172,14 @@ class DailyScriptTests(unittest.TestCase):
             matcher=FakeMatcher(),  # type: ignore[arg-type]
             sleeper=NullSleeper(),
             logger=logging.getLogger("test.daily_script"),
-            window_info=WindowInfo(hwnd=100, title="MapleStory", x=10, y=20, width=800, height=600),
+            window_info=WindowInfo(
+                hwnd=100,
+                title="MapleStory",
+                x=10,
+                y=20,
+                width=800,
+                height=600,
+            ),
         )
         runner.vars.update({"xEnd": 1000, "yEnd": 800})
 
@@ -190,6 +199,84 @@ class DailyScriptTests(unittest.TestCase):
                 ("mouse_wheel", (1,)),
             ],
         )
+
+    def test_left_click_two_uses_fast_down_up_sequence(self) -> None:
+        device = DryRunDevice()
+        runner = DailyRunner(
+            config=load_config(load_local=False),
+            device=device,
+            matcher=FakeMatcher(),  # type: ignore[arg-type]
+            sleeper=NullSleeper(),
+            logger=logging.getLogger("test.daily_script"),
+            window_info=WindowInfo(hwnd=100, title="MapleStory", x=10, y=20, width=800, height=600),
+        )
+
+        runner._execute_statement("LeftClick 2")  # noqa: SLF001
+
+        self.assertEqual(
+            [(action.name, action.args) for action in device.actions],
+            [
+                ("left_down", ()),
+                ("left_up", ()),
+                ("left_down", ()),
+                ("left_up", ()),
+            ],
+        )
+
+    def test_scheduler_ui_match_uses_full_window_region(self) -> None:
+        matcher = SequenceMatcher({"SchedulerUI": [True]})
+        runner = DailyRunner(
+            config=load_config(load_local=False),
+            device=DryRunDevice(),
+            matcher=matcher,  # type: ignore[arg-type]
+            sleeper=NullSleeper(),
+            logger=logging.getLogger("test.daily_script"),
+            window_info=WindowInfo(
+                hwnd=100,
+                title="MapleStory",
+                x=21,
+                y=1719,
+                width=1366,
+                height=768,
+            ),
+        )
+        runner._initialize_window()  # noqa: SLF001
+
+        self.assertIsNotNone(runner._match_scheduler_ui())  # noqa: SLF001
+
+        self.assertEqual(matcher.regions[-1], Region.from_bounds(21, 1719, 1387, 2487))
+
+    def test_hd_daily_pauses_when_reward_state_is_not_recognized(self) -> None:
+        pause_requests: list[str] = []
+        runner = DailyRunner(
+            config=load_config(load_local=False),
+            device=DryRunDevice(),
+            matcher=SequenceMatcher(
+                {
+                    "Mark2.bmp": [False, False],
+                    "Gift.bmp": [False],
+                    "OK.bmp": [False],
+                }
+            ),  # type: ignore[arg-type]
+            sleeper=NullSleeper(),
+            logger=logging.getLogger("test.daily_script"),
+            request_pause=lambda: pause_requests.append("pause"),
+            window_info=WindowInfo(
+                hwnd=100,
+                title="MapleStory",
+                x=21,
+                y=1719,
+                width=1366,
+                height=768,
+            ),
+        )
+        runner._initialize_window()  # noqa: SLF001
+        runner._play_hd_reward_alert = lambda: None  # type: ignore[method-assign]  # noqa: SLF001
+
+        handled = runner._handle_hd_reward_after_click()  # noqa: SLF001
+
+        self.assertFalse(handled)
+        self.assertEqual(pause_requests, ["pause"])
 
     def test_receive_daily_quest_opens_scheduler_clicks_receive_and_closes(self) -> None:
         device = DryRunDevice()

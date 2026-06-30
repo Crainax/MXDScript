@@ -12,6 +12,11 @@ from mhscript_yjs.scripts.daily.combine_main import (
     DEFAULT_DAILY_OPTIONS,
     create_runner as create_daily_runner,
 )
+from mhscript_yjs.scripts.leveling.leveling import (
+    LEVELING_SCRIPT_ID,
+    LEVELING_SCRIPT_NAME,
+    create_runner as create_leveling_runner,
+)
 from mhscript_yjs.scripts.tool.coordinate_mover import (
     COORDINATE_MOVER_SCRIPT_ID,
     DEFAULT_COORDINATE_MOVER_OPTIONS,
@@ -25,7 +30,7 @@ from mhscript_yjs.scripts.tool.image_debug import (
     run_coordinate_detector,
     run_image_recognition,
 )
-from mhscript_yjs.scripts.tool.open_package import create_runner
+from mhscript_yjs.scripts.tool.open_package import create_runner as create_open_package_runner
 
 
 def _noop_emit_data(payload: Mapping[str, Any]) -> None:
@@ -77,13 +82,13 @@ def get_script_definitions() -> tuple[ScriptDefinition, ...]:
         definition
         for definition in (
         ScriptDefinition(
-            id="open_package",
-            name="自动开包",
-            category="工具",
-            description="自动开怪怪卡牌包并转成精华",
-            module="mhscript_yjs.scripts.tool.open_package",
-            default_shortcut="F10",
-            runner=_run_open_package,
+            id=LEVELING_SCRIPT_ID,
+            name=LEVELING_SCRIPT_NAME,
+            category="角色",
+            description="自动执行 AUT 练级循环：喷泉、亚努斯、攻击点、防呆、轮回碑石和符文暂停。",
+            module="mhscript_yjs.scripts.leveling.leveling",
+            default_shortcut="Ctrl+F10",
+            runner=_run_leveling_script,
             placeholder=False,
             requires_mouse_precision=True,
         ),
@@ -98,6 +103,17 @@ def get_script_definitions() -> tuple[ScriptDefinition, ...]:
             placeholder=False,
             requires_mouse_precision=True,
             default_options=DEFAULT_DAILY_OPTIONS,
+        ),
+        ScriptDefinition(
+            id="open_package",
+            name="自动开包",
+            category="工具",
+            description="自动开怪怪卡牌包并转成精华",
+            module="mhscript_yjs.scripts.tool.open_package",
+            default_shortcut="",
+            runner=_run_open_package,
+            placeholder=False,
+            requires_mouse_precision=True,
         ),
         ScriptDefinition(
             id=IMAGE_RECOGNITION_SCRIPT_ID,
@@ -187,7 +203,7 @@ def _run_coordinate_mover(context: ScriptRunContext) -> ScriptRunResult:
 
 def _run_open_package(context: ScriptRunContext) -> ScriptRunResult:
     context.logger.info("自动开包脚本准备启动。")
-    runner = create_runner(
+    runner = create_open_package_runner(
         config=context.config,
         dry_run=context.dry_run,
         skip_delays=context.skip_delays,
@@ -202,6 +218,25 @@ def _run_open_package(context: ScriptRunContext) -> ScriptRunResult:
             "no_find_count": result.no_find_count,
             "cards_opened": result.cards_opened,
         },
+    )
+
+
+def _run_leveling_script(context: ScriptRunContext) -> ScriptRunResult:
+    context.logger.info("练级脚本准备启动：options=%s", dict(context.script_options))
+    runner = create_leveling_runner(
+        config=context.config,
+        dry_run=context.dry_run,
+        skip_delays=context.skip_delays,
+        logger=context.logger,
+        control=context.control,
+        options=dict(context.script_options),
+        request_pause=context.request_pause,
+    )
+    result = runner.run()
+    return ScriptRunResult(
+        exit_reason=result.exit_reason,
+        iterations=result.steps,
+        details={"map": result.map_id},
     )
 
 

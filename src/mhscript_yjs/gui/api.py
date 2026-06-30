@@ -154,6 +154,9 @@ class GuiApi:
                 )
             except ShortcutError:
                 pass
+        if defaults["shortcuts"].get("open_package") == "F10":
+            defaults["shortcuts"]["open_package"] = ""
+        _clear_duplicate_shortcuts(self.manager, defaults["shortcuts"])
         theme = data.get("theme")
         if theme in {"system", "light", "dark"}:
             defaults["theme"] = theme
@@ -240,6 +243,18 @@ def _write_json(path: Path, data: dict[str, Any]) -> None:
 
 def _default_shortcuts(manager: ScriptManager) -> dict[str, str]:
     return {definition.id: definition.default_shortcut for definition in manager.definitions}
+
+
+def _clear_duplicate_shortcuts(manager: ScriptManager, shortcuts: dict[str, str]) -> None:
+    used: set[str] = set()
+    for definition in manager.definitions:
+        shortcut = shortcuts.get(definition.id, "")
+        if not shortcut:
+            continue
+        if shortcut in used:
+            shortcuts[definition.id] = ""
+            continue
+        used.add(shortcut)
 
 
 def _default_script_options(manager: ScriptManager) -> dict[str, dict[str, Any]]:

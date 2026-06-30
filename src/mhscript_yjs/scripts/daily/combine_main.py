@@ -26,6 +26,7 @@ from mhscript_yjs.drivers.yjs import YjsDevice
 from mhscript_yjs.runtime.control import NullRunControl, RunControl, StopRequested
 from mhscript_yjs.runtime.logging import log_important
 from mhscript_yjs.runtime.sound import beep as play_beep
+from mhscript_yjs.runtime.sound import message_beep
 from mhscript_yjs.runtime.timing import NullSleeper, Sleeper
 from mhscript_yjs.scripts.daily.combine_main_source import SOURCE as COMBINE_MAIN_SOURCE
 from mhscript_yjs.vision.matcher import TemplateMatcher
@@ -47,6 +48,8 @@ DEFAULT_DAILY_OPTIONS = {
 JOB_DETECTION_THRESHOLD = DAILY_MATCH_THRESHOLD
 COORDINATE_PIXEL_COLOR_TOLERANCE = 18
 COORDINATE_PIXEL_ALLOWED_BAD_PIXELS = 2
+FAST_CLICK_HOLD_MS = 18
+FAST_MULTI_CLICK_INTERVAL_MS = 35
 
 
 @dataclass(frozen=True)
@@ -223,6 +226,9 @@ class DailyRunner:
         if lowered == "gugu":
             self._run_gugu()
             return
+        if lowered == "hddaily":
+            self._run_hd_daily()
+            return
         if lowered == "receivequest":
             self._receive_daily_quest()
             return
@@ -368,9 +374,7 @@ class DailyRunner:
             play_beep(frequency, duration_ms, logger=self.logger)
             return
         if lower == "pause":
-            log_important(self.logger, "[Daily] KM Pause command reached; script paused")
-            self.request_pause()
-            self.control.wait_if_paused()
+            self._pause_from_script("[Daily] KM Pause command reached; script paused")
             return
         if lower.startswith("delayrandom "):
             first, second = self._eval_args(line[12:])
@@ -414,7 +418,7 @@ class DailyRunner:
         if lower.startswith("leftclick"):
             rest = line[9:].strip()
             count = int(self._eval_expr(rest)) if rest else 1
-            self.device.left_click(count)
+            self._left_click(count)
             return
         if lower == "leftdown":
             self.device.left_down()
@@ -808,6 +812,150 @@ class DailyRunner:
         self.device.press_key(keycode("Left"), 1)
         self.sleeper.delay_ms(200)
 
+    def _run_hd_daily(self) -> None:
+        while True:
+            if self._find_hd_image("HDMark.bmp", "logoX", "logoY"):
+                self.sleeper.delay_random_ms(200, 300)
+                if self._find_ok_button():
+                    log_important(
+                        self.logger,
+                        "[HDDaily] Monthly HD rewards completed, pressing Enter",
+                    )
+                    self.device.press_key(keycode("Enter"), 1)
+                    self.sleeper.delay_random_ms(139, 142)
+                    self._close_hd_interface(
+                        "[HDDaily] HD interface closed, monthly rewards completed"
+                    )
+                    break
+
+                attempts = 0
+                while attempts < 2:
+                    self.sleeper.delay_random_ms(200, 300)
+                    if self._find_ok_button():
+                        log_important(
+                            self.logger,
+                            "[HDDaily] Monthly HD rewards completed, pressing Enter",
+                        )
+                        self.device.press_key(keycode("Enter"), 1)
+                        self.sleeper.delay_random_ms(139, 142)
+
+                    log_important(self.logger, "[HDDaily] HDMark found, clicking offset position")
+                    self.device.move_to(
+                        round(float(self.vars["logoX"])) + 290,
+                        round(float(self.vars["logoY"])) + 52,
+                    )
+                    self.sleeper.delay_ms(50)
+                    self._left_click(1)
+                    self.sleeper.delay_random_ms(139, 142)
+
+                    if self._handle_hd_reward_after_click():
+                        return
+                    attempts += 1
+                    log_important(
+                        self.logger,
+                        "[HDDaily] Gift processing attempt %s completed",
+                        attempts,
+                    )
+                    self.sleeper.delay_random_ms(500, 800)
+
+                log_important(self.logger, "[HDDaily] Closing HD interface")
+                self._close_hd_interface("[HDDaily] HD interface closed successfully")
+                break
+
+            if self._find_pic(
+                self._region("x1", "y1", "xEnd", "yEnd"),
+                (r"E:\MHImg\UI\Setting.bmp",),
+                DAILY_MATCH_THRESHOLD,
+                "intX",
+                "intY",
+            ):
+                self.device.move_to(
+                    round(float(self.vars["intX"])) + 65,
+                    round(float(self.vars["intY"])) - 511,
+                )
+                self.sleeper.delay_ms(50)
+                self._left_click(1)
+                self.sleeper.delay_random_ms(139, 142)
+            else:
+                self.device.press_key(keycode("Esc"), 1)
+                self.sleeper.delay_random_ms(139, 142)
+
+    def _handle_hd_reward_after_click(self) -> bool:
+        if not self._find_hd_image("Mark2.bmp"):
+            self.sleeper.delay_ms(250)
+            self._find_hd_image("Mark2.bmp")
+
+        if self.vars.get("intX", -1) >= 0:
+            log_important(self.logger, "[HDDaily] Mark2 detected, checking for gift")
+            if self._find_hd_image("Gift.bmp"):
+                log_important(self.logger, "[HDDaily] Gift detected, closing interface directly")
+                self._close_hd_interface(
+                    "[HDDaily] HD interface closed, gift processing completed"
+                )
+                return True
+            self._pause_for_hd_reward_selection("[HDDaily] No gift found, playing warning sound")
+            return False
+
+        if self._find_hd_image("Gift.bmp"):
+            log_important(self.logger, "[HDDaily] Gift detected, closing interface directly")
+            self._close_hd_interface("[HDDaily] HD interface closed, gift processing completed")
+            return True
+
+        if self._find_ok_button():
+            log_important(self.logger, "[HDDaily] OK button found, pressing Enter")
+            self.device.press_key(keycode("Enter"), 1)
+            self.sleeper.delay_random_ms(139, 142)
+            log_important(self.logger, "[HDDaily] Closing HD interface")
+            self._close_hd_interface("[HDDaily] HD interface closed successfully")
+            return True
+
+        self._pause_for_hd_reward_selection(
+            "[HDDaily] Reward state not recognized; waiting for manual selection"
+        )
+        return False
+
+    def _find_hd_image(
+        self,
+        filename: str,
+        out_x: str = "intX",
+        out_y: str = "intY",
+    ) -> bool:
+        return self._find_pic(
+            self._region("x1", "y1", "xEnd", "yEnd"),
+            (fr"E:\MHImg\UI\Daily\HD\{filename}",),
+            DAILY_MATCH_THRESHOLD,
+            out_x,
+            out_y,
+        )
+
+    def _find_ok_button(self) -> bool:
+        return self._find_pic(
+            self._region("x1", "y1", "xEnd", "yEnd"),
+            (r"E:\MHImg\UI\OK.bmp",),
+            DAILY_MATCH_THRESHOLD,
+            "intX",
+            "intY",
+        )
+
+    def _close_hd_interface(self, success_message: str) -> None:
+        while True:
+            if self._find_hd_image("HDMark.bmp"):
+                self.device.press_key(keycode("Esc"), 1)
+                self.sleeper.delay_random_ms(139, 142)
+            else:
+                log_important(self.logger, success_message)
+                break
+
+    def _pause_for_hd_reward_selection(self, message: str) -> None:
+        log_important(self.logger, message)
+        self._play_hd_reward_alert()
+        self._pause_from_script("[HDDaily] Script paused for manual reward selection")
+
+    def _play_hd_reward_alert(self) -> None:
+        for frequency in (523, 698, 523, 698):
+            play_beep(frequency, 120, logger=self.logger, sync=True)
+        message_beep(logger=self.logger)
+
     def _receive_daily_quest(self) -> str:
         log_important(self.logger, "[ReceiveQuest] 开始接取每日任务")
         self._ensure_scheduler_ui_open()
@@ -933,7 +1081,7 @@ class DailyRunner:
         return self._match_combine_main_image(
             "SchedulerUI",
             "SchedulerUI.png",
-            region=self._scheduler_ui_region(),
+            region=self._region("x1", "y1", "xEnd", "yEnd"),
         )
 
     def _scheduler_ui_region(self) -> Region:
@@ -1162,10 +1310,32 @@ class DailyRunner:
         self.device.key_up(keycode(name))
         self.sleeper.delay_random_ms(39, 42)
 
+    def _left_click(self, count: int = 1) -> None:
+        if count <= 1:
+            self.device.left_click(1)
+            return
+        self.logger.info(
+            "fast_left_click count=%s hold_ms=%s interval_ms=%s",
+            count,
+            FAST_CLICK_HOLD_MS,
+            FAST_MULTI_CLICK_INTERVAL_MS,
+        )
+        for index in range(count):
+            self.device.left_down()
+            self.sleeper.delay_ms(FAST_CLICK_HOLD_MS)
+            self.device.left_up()
+            if index < count - 1:
+                self.sleeper.delay_ms(FAST_MULTI_CLICK_INTERVAL_MS)
+
+    def _pause_from_script(self, message: str) -> None:
+        log_important(self.logger, message)
+        self.request_pause()
+        self.control.wait_if_paused()
+
     def _move_click(self, x: float, y: float, count: int = 1) -> None:
         self.device.move_to(round(x), round(y))
         self.sleeper.delay_ms(50)
-        self.device.left_click(count)
+        self._left_click(count)
 
     def _region(self, left: str, top: str, right: str, bottom: str) -> Region:
         self._refresh_window_position()

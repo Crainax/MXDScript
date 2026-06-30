@@ -32,19 +32,21 @@ class ScriptManagerTests(unittest.TestCase):
                     os.environ["LOCALAPPDATA"] = old
 
         scripts = snapshot["scripts"]
-        self.assertEqual(len(scripts), 5)
-        self.assertEqual(scripts[0]["id"], "open_package")
-        self.assertEqual(scripts[0]["name"], "自动开包")
-        self.assertEqual(scripts[0]["defaultShortcut"], "F10")
+        self.assertEqual(len(scripts), 6)
+        self.assertEqual(scripts[0]["id"], "leveling")
+        self.assertEqual(scripts[0]["name"], "练级")
+        self.assertEqual(scripts[0]["defaultShortcut"], "Ctrl+F10")
         self.assertFalse(scripts[0]["placeholder"])
         self.assertEqual(scripts[1]["id"], "daily_script")
         self.assertFalse(scripts[1]["placeholder"])
-        self.assertEqual(scripts[2]["id"], "image_recognition")
+        self.assertEqual(scripts[2]["id"], "open_package")
         self.assertEqual(scripts[2]["defaultShortcut"], "")
-        self.assertEqual(scripts[3]["id"], "coordinate_detector")
-        self.assertEqual(scripts[4]["id"], "coordinate_mover")
-        self.assertEqual(scripts[4]["defaultShortcut"], "")
-        self.assertEqual(scripts[4]["defaultOptions"]["moveMode"], "MoveB")
+        self.assertEqual(scripts[3]["id"], "image_recognition")
+        self.assertEqual(scripts[3]["defaultShortcut"], "")
+        self.assertEqual(scripts[4]["id"], "coordinate_detector")
+        self.assertEqual(scripts[5]["id"], "coordinate_mover")
+        self.assertEqual(scripts[5]["defaultShortcut"], "")
+        self.assertEqual(scripts[5]["defaultOptions"]["moveMode"], "MoveB")
 
     def test_script_logger_uses_unique_file_per_run(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -53,6 +53,13 @@ class PanelCandidate:
 
 
 @dataclass(frozen=True)
+class SlotCenterCandidate:
+    score: float
+    x: float
+    y: float
+
+
+@dataclass(frozen=True)
 class SlotPrediction:
     slot: int
     predicted: str
@@ -985,6 +992,134 @@ def _slot_crop(
     return _crop_centered(image, center_x, center_y, size)
 
 
+def _align_expected_slot_centers(
+    image: np.ndarray,
+    panel: PanelCandidate,
+    expected_indices: tuple[int, int, int, int],
+    templates: dict[int, np.ndarray],
+    variant: tuple[int, int],
+) -> (
+    tuple[SlotCenterCandidate, SlotCenterCandidate, SlotCenterCandidate, SlotCenterCandidate]
+    | None
+):
+    candidates_by_slot = [
+        _expected_slot_center_candidates(
+            image,
+            panel,
+            slot,
+            templates[expected_index],
+            variant,
+        )
+        for slot, expected_index in enumerate(expected_indices)
+    ]
+
+    best_score = -float("inf")
+    best_centers: list[SlotCenterCandidate] | None = None
+
+    def search(
+        slot: int,
+        previous_x: float,
+        centers: list[SlotCenterCandidate],
+        score: float,
+    ) -> None:
+        nonlocal best_score, best_centers
+        if slot == 4:
+            xs = np.array([center.x for center in centers], dtype=np.float32)
+            gap_penalty = float(np.std(np.diff(xs)) * 0.0035) if len(xs) > 1 else 0.0
+            ordered_score = score - gap_penalty
+            if ordered_score > best_score:
+                best_score = ordered_score
+                best_centers = centers.copy()
+            return
+
+        for candidate in candidates_by_slot[slot]:
+            if candidate.x <= previous_x + 30:
+                continue
+            centers.append(candidate)
+            search(slot + 1, candidate.x, centers, score + candidate.score)
+            centers.pop()
+
+    search(0, -float("inf"), [], 0.0)
+    if best_centers is None:
+        return None
+    return tuple(best_centers)  # type: ignore[return-value]
+
+
+def _expected_slot_center_candidates(
+    image: np.ndarray,
+    panel: PanelCandidate,
+    slot: int,
+    template: np.ndarray,
+    variant: tuple[int, int],
+) -> list[SlotCenterCandidate]:
+    _, small_size = variant
+    margin_x = max(120, int(panel.width * 0.35))
+    margin_y = max(60, int(panel.height * 0.9))
+    x1 = max(0, int(panel.x - margin_x))
+    x2 = min(image.shape[1], int(panel.x + panel.width + margin_x))
+    y1 = max(0, int(panel.y - margin_y))
+    y2 = min(image.shape[0], int(panel.y + panel.height + margin_y))
+    search_crop = image[y1:y2, x1:x2]
+    if search_crop.shape[0] < small_size or search_crop.shape[1] < small_size:
+        return [_fixed_slot_center(panel, slot)]
+
+    result = cv2.matchTemplate(_represent(search_crop), template, cv2.TM_CCOEFF_NORMED)
+    fixed_x = panel.x + panel.width * SLOT_FRACTIONS[slot]
+    fixed_y = panel.y + panel.height * 0.52
+    min_x = panel.x - margin_x
+    max_x = panel.x + panel.width + margin_x
+    min_y = panel.y - margin_y
+    max_y = panel.y + panel.height + margin_y
+    candidates: list[SlotCenterCandidate] = []
+    work = result.copy()
+
+    for _ in range(28):
+        _, template_score, _, location = cv2.minMaxLoc(work)
+        if template_score < 0.12:
+            break
+        center_x = x1 + location[0] + small_size / 2
+        center_y = y1 + location[1] + small_size / 2
+        if min_x <= center_x <= max_x and min_y <= center_y <= max_y:
+            color_mass = _saturated_color_mass(image, center_x, center_y, big_size=72)
+            score = float(
+                template_score
+                + 0.035 * min(color_mass, 0.8)
+                - 0.00055 * abs(center_x - fixed_x)
+                - 0.0017 * abs(center_y - fixed_y)
+            )
+            candidates.append(SlotCenterCandidate(score=score, x=center_x, y=center_y))
+
+        lx, ly = location
+        work[
+            max(0, ly - 22) : min(work.shape[0], ly + 22),
+            max(0, lx - 28) : min(work.shape[1], lx + 28),
+        ] = -1
+
+    candidates.append(_fixed_slot_center(panel, slot))
+    candidates.sort(key=lambda candidate: candidate.score, reverse=True)
+    return candidates[:12]
+
+
+def _fixed_slot_center(panel: PanelCandidate, slot: int) -> SlotCenterCandidate:
+    return SlotCenterCandidate(
+        score=0.0,
+        x=panel.x + panel.width * SLOT_FRACTIONS[slot],
+        y=panel.y + panel.height * 0.52,
+    )
+
+
+def _saturated_color_mass(
+    image: np.ndarray,
+    center_x: float,
+    center_y: float,
+    big_size: int,
+) -> float:
+    crop = _crop_centered(image, center_x, center_y, big_size)
+    hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
+    mask = cv2.inRange(hsv, np.array([0, 80, 120]), np.array([179, 255, 255]))
+    return cv2.countNonZero(mask) / max(1, mask.size)
+
+
 def _crop_centered(
     image: np.ndarray,
     center_x: float,
@@ -1090,15 +1225,32 @@ def _write_crops_and_contact_sheets(
     panel_overrides = panel_overrides or {}
     for record in image_records:
         panel = panel_overrides.get(record.path.name, record.panel)
+        aligned_centers = None
+        if record.path.name in panel_overrides:
+            aligned_centers = _align_expected_slot_centers(
+                record.image,
+                panel,
+                record.expected_indices,
+                first_templates,
+                first_variant,
+            )
         for slot, expected_index in enumerate(record.expected_indices):
-            big_crop = _slot_crop(record.image, panel, slot, first_variant[0])
-            representation = _represent(big_crop)
-            template = first_templates[expected_index]
-            result = cv2.matchTemplate(representation, template, cv2.TM_CCOEFF_NORMED)
-            _, _, _, location = cv2.minMaxLoc(result)
-            center_x = location[0] + first_variant[1] / 2
-            center_y = location[1] + first_variant[1] / 2
-            crop = _crop_centered(big_crop, center_x, center_y, 72)
+            if aligned_centers is not None:
+                crop = _crop_centered(
+                    record.image,
+                    aligned_centers[slot].x,
+                    aligned_centers[slot].y,
+                    72,
+                )
+            else:
+                big_crop = _slot_crop(record.image, panel, slot, first_variant[0])
+                representation = _represent(big_crop)
+                template = first_templates[expected_index]
+                result = cv2.matchTemplate(representation, template, cv2.TM_CCOEFF_NORMED)
+                _, _, _, location = cv2.minMaxLoc(result)
+                center_x = location[0] + first_variant[1] / 2
+                center_y = location[1] + first_variant[1] / 2
+                crop = _crop_centered(big_crop, center_x, center_y, 72)
             direction_name = DIRECTION_NAMES[expected_index]
             crop_name = f"{record.path.stem}_slot{slot + 1}_{direction_name}.png"
             crop_path = crops_dir / direction_name / crop_name

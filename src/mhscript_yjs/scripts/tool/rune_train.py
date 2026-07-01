@@ -95,7 +95,6 @@ class ReviewSummary:
     hard_count: int
     bad_count: int
     pending_count: int
-    label_correction_count: int
     clean_training_sample_count: int
     clean_image_count: int
     bad_with_direction_count: int
@@ -152,8 +151,6 @@ class _ReviewItem:
     source_image: str
     slot: int
     expected: str
-    corrected_expected: str | None
-    label: str | None
     crop_path: str
     review: str
     notes: str
@@ -243,7 +240,6 @@ def _load_review_results(path: Path) -> list[_ReviewItem]:
             "source_image",
             "slot",
             "expected",
-            "corrected_expected",
             "crop_path",
             "review",
             "notes",
@@ -262,11 +258,7 @@ def _load_review_results(path: Path) -> list[_ReviewItem]:
             expected = _normalize_direction(row.get("expected") or "")
             if expected is None:
                 raise ValueError(f"Review row has unknown expected direction: {row}")
-            corrected_expected = _normalize_direction(row.get("corrected_expected") or "")
             review = _normalize_review(row.get("review") or "")
-            label = corrected_expected or expected
-            if review not in REVIEW_TRAINING_STATUSES:
-                label = None
             notes = (row.get("notes") or "").strip()
             items.append(
                 _ReviewItem(
@@ -274,8 +266,6 @@ def _load_review_results(path: Path) -> list[_ReviewItem]:
                     source_image=source_image,
                     slot=slot,
                     expected=expected,
-                    corrected_expected=corrected_expected,
-                    label=label,
                     crop_path=(row.get("crop_path") or "").strip(),
                     review=review,
                     notes=notes,
@@ -338,7 +328,6 @@ def run_training(
                 image_records,
                 review_items,
             )
-        image_records = _apply_review_labels_to_image_records(image_records, review_by_slot)
     else:
         review_by_slot = None
 
@@ -530,32 +519,6 @@ def _locate_panel_expanded_band(image: np.ndarray, hsv: np.ndarray) -> PanelCand
     return best
 
 
-def _apply_review_labels_to_image_records(
-    image_records: list[_ImageRecord],
-    review_by_slot: dict[tuple[str, int], _ReviewItem],
-) -> list[_ImageRecord]:
-    reviewed_records: list[_ImageRecord] = []
-    for record in image_records:
-        expected = list(record.expected)
-        for slot in range(4):
-            review = review_by_slot.get((record.path.name, slot))
-            if review is not None and review.label is not None:
-                expected[slot] = review.label
-        expected_tuple = tuple(expected)  # type: ignore[assignment]
-        expected_indices = tuple(
-            DIRECTION_NAMES.index(item)
-            for item in expected_tuple
-        )
-        reviewed_records.append(
-            replace(
-                record,
-                expected=expected_tuple,
-                expected_indices=expected_indices,  # type: ignore[arg-type]
-            )
-        )
-    return reviewed_records
-
-
 def _apply_review_results_to_slot_records(
     slot_records: list[_SlotRecord],
     review_by_slot: dict[tuple[str, int], _ReviewItem],
@@ -565,14 +528,9 @@ def _apply_review_results_to_slot_records(
     for record in slot_records:
         key = (record.image_path.name, record.slot)
         review = review_by_slot.get(key)
-        if review is None or review.label is None:
+        if review is None or review.review not in REVIEW_TRAINING_STATUSES:
             continue
-        clean_records.append(
-            replace(
-                record,
-                expected_index=DIRECTION_NAMES.index(review.label),
-            )
-        )
+        clean_records.append(record)
         clean_slot_keys.add(key)
     return clean_records, clean_slot_keys
 
@@ -621,12 +579,6 @@ def _summarize_review_results(
         hard_count=review_counts["hard"],
         bad_count=review_counts["bad"],
         pending_count=review_counts["pending"],
-        label_correction_count=sum(
-            1
-            for item in review_items
-            if item.corrected_expected is not None
-            and item.corrected_expected != item.expected
-        ),
         clean_training_sample_count=len(clean_slot_records),
         clean_image_count=clean_images,
         bad_with_direction_count=sum(
@@ -1510,7 +1462,6 @@ def _write_crop_review_manifest(
                 "source_image",
                 "slot",
                 "expected",
-                "corrected_expected",
                 "crop_path",
                 "review",
                 "notes",
@@ -1523,7 +1474,6 @@ def _write_crop_review_manifest(
                     item["source_image"],
                     item["slot"],
                     item["expected"],
-                    "",
                     item["crop_path"],
                     "",
                     "",
@@ -1637,26 +1587,6 @@ def _write_crop_review_html(
       color: #ffffff;
       font-weight: 700;
     }}
-    .card.corrected {{
-      box-shadow: inset 0 0 0 2px #8dd3ff;
-    }}
-    .label-row {{
-      display: grid;
-      grid-template-columns: 1fr;
-      gap: 4px;
-      padding: 0 8px 8px;
-      font-size: 12px;
-      color: #b8c7d6;
-    }}
-    .label-row select {{
-      width: 100%;
-      padding: 5px 6px;
-      font-size: 12px;
-    }}
-    .corrected-text {{
-      color: #8dd3ff;
-      font-weight: 700;
-    }}
     .choices {{
       display: grid;
       grid-template-columns: repeat(3, 1fr);
@@ -1747,10 +1677,6 @@ def _write_crop_review_html(
       return state[item.id]?.notes || "";
     }}
 
-    function correctedExpectedOf(item) {{
-      return state[item.id]?.corrected_expected || item.expected;
-    }}
-
     function setReview(item, review) {{
       state[item.id] = {{ ...(state[item.id] || {{}}), review }};
       if (review === "pending") {{
@@ -1768,25 +1694,13 @@ def _write_crop_review_html(
       saveState();
     }}
 
-    function setCorrectedExpected(item, correctedExpected) {{
-      state[item.id] = {{
-        ...(state[item.id] || {{}}),
-        corrected_expected: correctedExpected,
-      }};
-      if (correctedExpected === item.expected) {{
-        delete state[item.id].corrected_expected;
-      }}
-      saveState();
-      render();
-    }}
-
     function itemVisible(item) {{
       const status = reviewOf(item);
       const wantedStatus = statusFilter.value;
       const wantedDirection = directionFilter.value;
       const query = searchBox.value.trim().toLowerCase();
       if (wantedStatus !== "all" && status !== wantedStatus) return false;
-      if (wantedDirection !== "all" && correctedExpectedOf(item) !== wantedDirection) {{
+      if (wantedDirection !== "all" && item.expected !== wantedDirection) {{
         return false;
       }}
       if (query && !`${{item.id}} ${{item.source_image}}`.toLowerCase().includes(query)) {{
@@ -1798,11 +1712,9 @@ def _write_crop_review_html(
     function render() {{
       grid.textContent = "";
       let visible = 0;
-      let corrected = 0;
       const counts = {{ pending: 0, ok: 0, bad: 0, hard: 0 }};
       for (const item of ITEMS) {{
         counts[reviewOf(item)] += 1;
-        if (correctedExpectedOf(item) !== item.expected) corrected += 1;
         if (!itemVisible(item)) continue;
         visible += 1;
         grid.appendChild(cardFor(item));
@@ -1810,16 +1722,13 @@ def _write_crop_review_html(
       stats.textContent =
         `显示 ${{visible}} / ${{ITEMS.length}} | ` +
         `未审 ${{counts.pending}} · OK ${{counts.ok}} · ` +
-        `Bad ${{counts.bad}} · Hard ${{counts.hard}} · 修正 ${{corrected}}`;
+        `Bad ${{counts.bad}} · Hard ${{counts.hard}}`;
     }}
 
     function cardFor(item) {{
       const review = reviewOf(item);
-      const correctedExpected = correctedExpectedOf(item);
       const card = document.createElement("section");
-      card.className =
-        `card ${{review === "pending" ? "" : review}} ` +
-        `${{correctedExpected !== item.expected ? "corrected" : ""}}`;
+      card.className = `card ${{review === "pending" ? "" : review}}`;
       card.tabIndex = 0;
       card.dataset.id = item.id;
 
@@ -1834,7 +1743,6 @@ def _write_crop_review_html(
       meta.className = "meta";
       meta.innerHTML =
         `<div class="expected">${{item.expected}} · slot ${{item.slot}}</div>` +
-        `<div>修正: <span class="corrected-text">${{correctedExpected}}</span></div>` +
         `<div>${{item.source_image}}</div>`;
 
       const choices = document.createElement("div");
@@ -1849,29 +1757,13 @@ def _write_crop_review_html(
         choices.appendChild(button);
       }}
 
-      const labelRow = document.createElement("label");
-      labelRow.className = "label-row";
-      labelRow.textContent = "修正方向";
-      const labelSelect = document.createElement("select");
-      for (const value of ["up", "down", "left", "right"]) {{
-        const option = document.createElement("option");
-        option.value = value;
-        option.textContent = value;
-        option.selected = value === correctedExpected;
-        labelSelect.appendChild(option);
-      }}
-      labelSelect.addEventListener("change", () => {{
-        setCorrectedExpected(item, labelSelect.value);
-      }});
-      labelRow.appendChild(labelSelect);
-
       const notes = document.createElement("input");
       notes.className = "notes";
       notes.placeholder = "备注";
       notes.value = notesOf(item);
       notes.addEventListener("change", () => setNotes(item, notes.value.trim()));
 
-      card.append(imageWrap, meta, choices, labelRow, notes);
+      card.append(imageWrap, meta, choices, notes);
       return card;
     }}
 
@@ -1885,7 +1777,6 @@ def _write_crop_review_html(
         "source_image",
         "slot",
         "expected",
-        "corrected_expected",
         "crop_path",
         "review",
         "notes",
@@ -1896,7 +1787,6 @@ def _write_crop_review_html(
           item.source_image,
           item.slot,
           item.expected,
-          correctedExpectedOf(item) === item.expected ? "" : correctedExpectedOf(item),
           item.crop_path,
           reviewOf(item) === "pending" ? "" : reviewOf(item),
           notesOf(item),
@@ -1978,7 +1868,6 @@ def _write_review_summary_csv(path: Path, summary: ReviewSummary) -> None:
         ("hard_count", summary.hard_count),
         ("bad_count", summary.bad_count),
         ("pending_count", summary.pending_count),
-        ("label_correction_count", summary.label_correction_count),
         ("clean_training_sample_count", summary.clean_training_sample_count),
         ("clean_image_count", summary.clean_image_count),
         ("bad_with_direction_count", summary.bad_with_direction_count),

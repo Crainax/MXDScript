@@ -77,16 +77,16 @@ def test_locate_panel_prefers_upper_capsule_with_arrows() -> None:
     assert abs(panel.width - width) <= 25
 
 
-def test_review_results_filter_bad_and_apply_corrections(tmp_path: Path) -> None:
+def test_review_results_filter_bad_and_keep_source_labels(tmp_path: Path) -> None:
     review_path = tmp_path / "crop_review_results.csv"
     review_path.write_text(
         "\n".join(
             [
-                "id,source_image,slot,expected,corrected_expected,crop_path,review,notes",
-                "type1_slot1,type1_左右上下.png,1,left,right,../crops/left/a.png,ok,",
-                "type1_slot2,type1_左右上下.png,2,right,,../crops/right/b.png,hard,",
-                "type1_slot3,type1_左右上下.png,3,up,,../crops/up/c.png,bad,错右",
-                "type1_slot4,type1_左右上下.png,4,down,,../crops/down/d.png,bad,裁偏内容无",
+                "id,source_image,slot,expected,crop_path,review,notes",
+                "type1_slot1,type1_左右上下.png,1,left,../crops/left/a.png,ok,",
+                "type1_slot2,type1_左右上下.png,2,right,../crops/right/b.png,hard,",
+                "type1_slot3,type1_左右上下.png,3,up,../crops/up/c.png,bad,错右",
+                "type1_slot4,type1_左右上下.png,4,down,../crops/down/d.png,bad,裁偏内容无",
             ]
         ),
         encoding="utf-8-sig",
@@ -100,7 +100,7 @@ def test_review_results_filter_bad_and_apply_corrections(tmp_path: Path) -> None
         _SlotRecord(
             image_index=0,
             slot=index,
-            expected_index=0,
+            expected_index=(2, 3, 0, 1)[index],
             image_path=Path("type1_左右上下.png"),
             reps={},
         )
@@ -114,7 +114,7 @@ def test_review_results_filter_bad_and_apply_corrections(tmp_path: Path) -> None
 
     assert len(clean_records) == 2
     assert clean_keys == {("type1_左右上下.png", 0), ("type1_左右上下.png", 1)}
-    assert DIRECTION_NAMES[clean_records[0].expected_index] == "right"
+    assert DIRECTION_NAMES[clean_records[0].expected_index] == "left"
     assert DIRECTION_NAMES[clean_records[1].expected_index] == "right"
 
     image_records = [
@@ -123,7 +123,7 @@ def test_review_results_filter_bad_and_apply_corrections(tmp_path: Path) -> None
             path=Path("type1_左右上下.png"),
             image=np.zeros((10, 10, 3), dtype=np.uint8),
             expected=("left", "right", "up", "down"),
-            expected_indices=(0, 3, 0, 1),
+            expected_indices=(2, 3, 0, 1),
             panel=PanelCandidate(1.0, 1, 2, 3, 4),
         )
     ]
@@ -139,7 +139,6 @@ def test_review_results_filter_bad_and_apply_corrections(tmp_path: Path) -> None
     assert summary.ok_count == 1
     assert summary.hard_count == 1
     assert summary.bad_count == 2
-    assert summary.label_correction_count == 1
     assert summary.clean_training_sample_count == 2
     assert summary.bad_with_direction_count == 1
     assert summary.bad_without_direction_count == 1

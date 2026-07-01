@@ -14,6 +14,7 @@ from mhscript_yjs.scripts.tool.rune_train import (
     _SlotRecord,
     _summarize_review_results,
     locate_panel,
+    locate_panel_expanded,
     parse_expected_sequence,
 )
 
@@ -54,6 +55,26 @@ def test_locate_panel_finds_synthetic_capsule() -> None:
     assert abs(panel.y - y) <= 12
     assert abs(panel.width - width) <= 25
     assert panel.score > 0.2
+
+
+def test_locate_panel_prefers_upper_capsule_with_arrows() -> None:
+    image = np.zeros((768, 1366, 3), dtype=np.uint8)
+    x, y, width, height = 520, 150, 400, 82
+    _draw_capsule(image, x, y, width, height)
+    _draw_capsule(image, 680, 220, 400, 82)
+    for fraction, color in zip(
+        (0.14, 0.39, 0.62, 0.86),
+        ((0, 0, 255), (0, 255, 255), (0, 255, 0), (255, 0, 255)),
+        strict=True,
+    ):
+        center_x = int(x + width * fraction)
+        cv2.circle(image, (center_x, y + height // 2), 12, color, -1)
+
+    panel = locate_panel_expanded(image)
+
+    assert abs(panel.x - x) <= 12
+    assert abs(panel.y - y) <= 12
+    assert abs(panel.width - width) <= 25
 
 
 def test_review_results_filter_bad_and_apply_corrections(tmp_path: Path) -> None:

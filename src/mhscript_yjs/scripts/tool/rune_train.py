@@ -314,6 +314,7 @@ def run_training(
     negative_dir: Path | None = None,
     folds: int = 5,
     review_results: Path | None = None,
+    relocate_reviewed_bad: bool = False,
 ) -> TrainingReport:
     positive_dir = positive_dir.resolve()
     output_dir = output_dir.resolve()
@@ -325,12 +326,18 @@ def run_training(
     review_items: list[_ReviewItem] = []
     review_slot_keys: set[tuple[str, int]] | None = None
     review_summary: ReviewSummary | None = None
+    crop_panel_overrides: dict[str, PanelCandidate] = {}
     if review_results is not None:
         review_items = _load_review_results(review_results)
         review_by_slot = {
             (item.source_image, item.slot): item
             for item in review_items
         }
+        if relocate_reviewed_bad:
+            crop_panel_overrides = _build_reviewed_bad_panel_overrides(
+                image_records,
+                review_items,
+            )
         image_records = _apply_review_labels_to_image_records(image_records, review_by_slot)
     else:
         review_by_slot = None
@@ -384,10 +391,27 @@ def run_training(
     ]
 
     final_model.save(output_dir / "model" / "rune_template_model.npz", threshold)
-    _write_crops_and_contact_sheets(image_records, final_model, output_dir)
+    _write_crops_and_contact_sheets(image_records, final_model, output_dir, crop_panel_overrides)
+    if crop_panel_overrides:
+        _write_relocated_bad_crops_contact_sheet(review_items, crop_panel_overrides, output_dir)
     _write_debug_images(final_positive_results, negative_results, output_dir)
     if review_summary is not None and review_results is not None:
-        _write_review_analysis_files(review_items, image_records, review_results.parent, output_dir)
+        analysis_records = _apply_panel_overrides_to_image_records(
+            image_records,
+            crop_panel_overrides,
+        )
+        _write_review_analysis_files(
+            review_items,
+            analysis_records,
+            review_results.parent,
+            output_dir,
+        )
+        if crop_panel_overrides:
+            _write_panel_overrides_csv(
+                output_dir / "review" / "relocated_bad_sources.csv",
+                image_records,
+                crop_panel_overrides,
+            )
 
     cv_arrow_accuracy = _mean([report.arrow_accuracy for report in fold_reports])
     cv_sequence_accuracy = _mean([report.sequence_accuracy for report in fold_reports])
@@ -427,6 +451,15 @@ def run_training(
 
 def locate_panel(image: np.ndarray) -> PanelCandidate:
     hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    return _locate_panel_legacy_band(image, hsv)
+
+
+def locate_panel_expanded(image: np.ndarray) -> PanelCandidate:
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    return _locate_panel_expanded_band(image, hsv)
+
+
+def _locate_panel_legacy_band(image: np.ndarray, hsv: np.ndarray) -> PanelCandidate:
     roi_x, roi_y = 350, 175
     roi = hsv[roi_y:320, roi_x:1050]
     bgr_roi = image[roi_y:320, roi_x:1050]
@@ -448,6 +481,49 @@ def locate_panel(image: np.ndarray) -> PanelCandidate:
             candidate = PanelCandidate(score=score, x=x, y=y, width=width, height=height)
             if best is None or candidate.score > best.score:
                 best = candidate
+
+    if best is None:
+        return PanelCandidate(score=0.0, x=0, y=0, width=0, height=0)
+    return best
+
+
+def _locate_panel_expanded_band(image: np.ndarray, hsv: np.ndarray) -> PanelCandidate:
+    roi_x, roi_y = 320, 115
+    roi = hsv[roi_y:285, roi_x:1080]
+    bgr_roi = image[roi_y:285, roi_x:1080]
+    hue_mask = cv2.inRange(roi, np.array([12, 20, 80]), np.array([55, 255, 255]))
+    gold_mask = cv2.inRange(bgr_roi, np.array([0, 70, 70]), np.array([170, 255, 255]))
+    mask = cv2.bitwise_and(hue_mask, gold_mask)
+
+    best: PanelCandidate | None = None
+    for width in (360, 380, 400, 420, 440):
+        for height in (72, 80, 88):
+            template = _capsule_template(width, height)
+            result = cv2.matchTemplate(mask, template, cv2.TM_CCORR_NORMED)
+            for _ in range(8):
+                _, template_score, _, location = cv2.minMaxLoc(result)
+                if template_score < 0:
+                    break
+                x = int(location[0] + roi_x)
+                y = int(location[1] + roi_y)
+                arrow_energy = _slot_arrow_energy(hsv, x, y, width, height)
+                center_bias = -abs((x + width / 2) - image.shape[1] / 2) / image.shape[1]
+                y_bias = -abs((y + height / 2) - 190) / 180
+                score = float(
+                    template_score
+                    + 0.30 * arrow_energy
+                    + 0.03 * center_bias
+                    + 0.05 * y_bias
+                )
+                candidate = PanelCandidate(score=score, x=x, y=y, width=width, height=height)
+                if best is None or candidate.score > best.score:
+                    best = candidate
+
+                lx, ly = location
+                result[
+                    max(0, ly - 12) : min(result.shape[0], ly + 12),
+                    max(0, lx - 40) : min(result.shape[1], lx + 40),
+                ] = -1
 
     if best is None:
         return PanelCandidate(score=0.0, x=0, y=0, width=0, height=0)
@@ -568,6 +644,34 @@ def _summarize_review_results(
         images_with_bad_count=len(images_with_bad),
         clean_direction_counts=direction_counts,
     )
+
+
+def _build_reviewed_bad_panel_overrides(
+    image_records: list[_ImageRecord],
+    review_items: list[_ReviewItem],
+) -> dict[str, PanelCandidate]:
+    bad_sources = {
+        item.source_image
+        for item in review_items
+        if item.review == "bad"
+    }
+    return {
+        record.path.name: locate_panel_expanded(record.image)
+        for record in image_records
+        if record.path.name in bad_sources
+    }
+
+
+def _apply_panel_overrides_to_image_records(
+    image_records: list[_ImageRecord],
+    panel_overrides: dict[str, PanelCandidate],
+) -> list[_ImageRecord]:
+    if not panel_overrides:
+        return image_records
+    return [
+        replace(record, panel=panel_overrides.get(record.path.name, record.panel))
+        for record in image_records
+    ]
 
 
 def _load_positive_records(positive_dir: Path) -> list[_ImageRecord]:
@@ -1021,6 +1125,7 @@ def _write_crops_and_contact_sheets(
     image_records: list[_ImageRecord],
     model: RuneTemplateModel,
     output_dir: Path,
+    panel_overrides: dict[str, PanelCandidate] | None = None,
 ) -> None:
     crops: list[tuple[np.ndarray, str, str, bool]] = []
     review_items: list[dict[str, int | str]] = []
@@ -1030,9 +1135,11 @@ def _write_crops_and_contact_sheets(
 
     first_variant = MODEL_VARIANTS[0]
     first_templates = model.templates[first_variant]
+    panel_overrides = panel_overrides or {}
     for record in image_records:
+        panel = panel_overrides.get(record.path.name, record.panel)
         for slot, expected_index in enumerate(record.expected_indices):
-            big_crop = _slot_crop(record.image, record.panel, slot, first_variant[0])
+            big_crop = _slot_crop(record.image, panel, slot, first_variant[0])
             representation = _represent(big_crop)
             template = first_templates[expected_index]
             result = cv2.matchTemplate(representation, template, cv2.TM_CCOEFF_NORMED)
@@ -1114,6 +1221,75 @@ def _write_review_analysis_files(
         image_by_name,
         output_review_dir / "crop_locator_failures.csv",
     )
+
+
+def _write_panel_overrides_csv(
+    path: Path,
+    image_records: list[_ImageRecord],
+    panel_overrides: dict[str, PanelCandidate],
+) -> None:
+    records_by_name = {record.path.name: record for record in image_records}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8-sig") as file:
+        writer = csv.writer(file)
+        writer.writerow(
+            [
+                "source_image",
+                "old_x",
+                "old_y",
+                "old_width",
+                "old_height",
+                "old_score",
+                "new_x",
+                "new_y",
+                "new_width",
+                "new_height",
+                "new_score",
+            ]
+        )
+        for source_image in sorted(panel_overrides):
+            old_panel = records_by_name[source_image].panel
+            new_panel = panel_overrides[source_image]
+            writer.writerow(
+                [
+                    source_image,
+                    old_panel.x,
+                    old_panel.y,
+                    old_panel.width,
+                    old_panel.height,
+                    f"{old_panel.score:.6f}",
+                    new_panel.x,
+                    new_panel.y,
+                    new_panel.width,
+                    new_panel.height,
+                    f"{new_panel.score:.6f}",
+                ]
+            )
+
+
+def _write_relocated_bad_crops_contact_sheet(
+    review_items: list[_ReviewItem],
+    panel_overrides: dict[str, PanelCandidate],
+    output_dir: Path,
+) -> None:
+    review_dir = output_dir / "review"
+    tiles: list[tuple[np.ndarray, str, str, bool]] = []
+    for item in review_items:
+        if item.review != "bad" or item.source_image not in panel_overrides:
+            continue
+        crop_path = _resolve_review_crop_path(review_dir, item.crop_path)
+        if not crop_path.exists():
+            continue
+        crop = _read_image(crop_path)
+        label = f"{Path(item.source_image).stem}_s{item.slot + 1}"
+        tiles.append((crop, item.source_image, label, True))
+    if tiles:
+        _write_contact_sheet(
+            tiles,
+            review_dir / "relocated_bad_crops_contact_sheet.png",
+            columns=10,
+            cell_size=96,
+        )
 
 
 def _write_bad_crops_contact_sheet(
@@ -1939,6 +2115,14 @@ def main() -> None:
         default=None,
         help="Optional crop_review_results.csv exported from the review UI.",
     )
+    parser.add_argument(
+        "--relocate-reviewed-bad",
+        action="store_true",
+        help=(
+            "Regenerate reviewed Bad source crops with the expanded locator "
+            "for a new review pass."
+        ),
+    )
     args = parser.parse_args()
 
     report = run_training(
@@ -1947,6 +2131,7 @@ def main() -> None:
         args.negative,
         args.folds,
         args.review_results,
+        args.relocate_reviewed_bad,
     )
     print(f"positive_count={report.positive_count}")
     print(f"negative_count={report.negative_count}")

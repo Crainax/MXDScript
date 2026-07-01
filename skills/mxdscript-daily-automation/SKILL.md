@@ -46,6 +46,15 @@ Coordinates should refresh the MapleStory client window each round. Coordinate s
 - For coordinate detection, match `MapAnchor.bmp`, `Me.bmp`, `Teleport.bmp`, and `Rune.bmp` against the same minimap screenshot in one cycle.
 - Log best/accepted matches at DEBUG when diagnosing misses, but keep GUI default filters at `IMPORTANT` and above.
 
+## Rune Automation Lessons
+
+- `MatchResult.x/y` are screen coordinates because `TemplateMatcher` adds the search region offset. Movement targets must use `Rune.bmp - MapAnchor.bmp`, matching the coordinate detector's `relativeX/relativeY`. A log like `screen=(143,1866)` should become a movement target like `(106,118)`, never `(143,1866)`.
+- Keep `ReleaseRune` shared. `combine_main` and `leveling` should call the same Python rune release flow instead of letting one script fall back to the legacy KM `Pause`.
+- Press `PageDown`, wait for the rune UI, recognize all four directions, freeze the four-key sequence, then press. Do not re-recognize after the first direction key because the first arrow may disappear.
+- Reject unsafe recognition before pressing any direction key. Use both the group score and per-slot confidence; on rejection, save a screenshot under `auto_screenshots/rune_solver`, press `Space` twice to exit the UI, wait about 3 seconds, and retry.
+- Only set `RuneCooldown` after leaving the rune position and confirming `Rune.bmp` is gone for multiple frames. If verification itself fails, pause for manual handling rather than assuming success.
+- Rune logs should be human-readable Chinese at `IMPORTANT` or higher for key decisions: target conversion, frozen directions, unsafe recognition screenshot, retry, success, and manual pause.
+
 ## GUI Runtime Lessons
 
 - The GUI can start another script while one is running; starting a new script requests stop on the current script first.

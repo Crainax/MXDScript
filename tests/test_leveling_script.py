@@ -5,11 +5,12 @@ import unittest
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from mhscript_yjs.characters import CharacterPosition, LaraController
+from mhscript_yjs.characters import CharacterPosition, LaraController, MoveTarget
 from mhscript_yjs.core.config import load_config
 from mhscript_yjs.drivers.dry_run import DryRunDevice
 from mhscript_yjs.runtime.timing import NullSleeper
 from mhscript_yjs.scripts.leveling.leveling import LevelingRunner
+from mhscript_yjs.scripts.tool.rune_solver import RunePressAttempt, RuneSolverConfig
 from mhscript_yjs.vision.types import ImageGroup, MatchResult, Region
 from mhscript_yjs.windows.maple import WindowInfo
 
@@ -48,18 +49,69 @@ class LevelingScriptTests(unittest.TestCase):
         self.assertEqual(runner.vars["CurrentJob"], runner.vars["JobLara"])
         self.assertIsInstance(runner._active_character_controller(), LaraController)  # noqa: SLF001
 
-    def test_release_rune_logs_and_delegates_to_reused_release_rune_sub(self) -> None:
-        runner = _runner(LevelingMatcher({"Leveling.Rune"}))
+    def test_release_rune_logs_and_starts_auto_solver(self) -> None:
+        runner = _runner(LevelingMatcher({"解符文.检测符文"}))
         runner._initialize_window()  # noqa: SLF001
         runner.vars["RuneCooldown"] = 0
-        calls: list[str] = []
-        runner.execute_sub = lambda name: calls.append(name)  # type: ignore[method-assign]
+        calls: list[MatchResult] = []
+        runner._solve_rune = lambda rune: calls.append(rune)  # type: ignore[method-assign]
 
         with self.assertLogs("test.leveling", level="INFO") as logs:
             runner._release_rune_if_ready()  # noqa: SLF001
 
-        self.assertEqual(calls, ["ReleaseRune"])
-        self.assertIn("前往解轮", "\n".join(logs.output))
+        self.assertEqual(len(calls), 1)
+        self.assertIn("[解符文] 检测到符文", "\n".join(logs.output))
+
+    def test_solve_rune_sets_cooldown_after_verified_success(self) -> None:
+        solver = FakeRuneSolver(
+            [RunePressAttempt("pressed", 1, "ok", ("up", "down", "left", "right"))]
+        )
+        runner = _runner(LevelingMatcher(), rune_solver=solver)
+        runner._initialize_window()  # noqa: SLF001
+        runner.vars["RuneCooldown"] = 0
+        moved: list[MatchResult] = []
+        runner._move_to_rune_icon = lambda rune: moved.append(rune) or True  # type: ignore[method-assign]
+        runner._leave_rune_and_find_remaining = lambda: (True, None)  # type: ignore[method-assign]
+
+        runner._solve_rune(_match())  # noqa: SLF001
+
+        self.assertEqual(len(moved), 1)
+        self.assertEqual(solver.attempts, [1])
+        self.assertGreater(runner.vars["RuneCooldown"], 0)
+
+    def test_solve_rune_pauses_after_repeated_unrecognized_attempts(self) -> None:
+        attempts = [
+            RunePressAttempt("unrecognized", index, "low_slot_confidence")
+            for index in range(1, 6)
+        ]
+        solver = FakeRuneSolver(attempts)
+        paused: list[str] = []
+        runner = _runner(
+            LevelingMatcher(),
+            rune_solver=solver,
+            request_pause=lambda: paused.append("pause"),
+        )
+        runner._initialize_window()  # noqa: SLF001
+        runner.vars["RuneCooldown"] = 0
+        runner._move_to_rune_icon = lambda rune: True  # type: ignore[method-assign]
+        runner._pause_for_manual_rune = lambda last_attempt: paused.append(last_attempt.reason)  # type: ignore[method-assign]
+
+        runner._solve_rune(_match())  # noqa: SLF001
+
+        self.assertEqual(solver.attempts, [1, 2, 3, 4, 5])
+        self.assertEqual(paused, ["low_slot_confidence"])
+        self.assertEqual(runner.vars["RuneCooldown"], 0)
+
+    def test_rune_target_uses_coordinate_detector_relative_position(self) -> None:
+        runner = _runner(LevelingMatcher())
+        target = runner._rune_target_from_matches(  # noqa: SLF001
+            _match_at(143, 1866),
+            _match_at(37, 1748),
+        )
+
+        self.assertEqual((target.x, target.y), (106, 118))
+        self.assertTrue(runner._rune_target_in_detection_region(target))  # noqa: SLF001
+        self.assertFalse(runner._rune_target_in_detection_region(_screen_like_target()))  # noqa: SLF001
 
     def test_reincarnation_stone_uses_character_stability_instead_of_km_stablebig(self) -> None:
         device = DryRunDevice()
@@ -87,7 +139,10 @@ class LevelingScriptTests(unittest.TestCase):
             runner._process_ball_logic(runner._get_map_config())  # noqa: SLF001
 
         self.assertEqual(moves, [(-81, 97, 2), (-81, 125, 2), (39, 80, 2)])
-        self.assertEqual([action.name for action in device.actions], ["press_key", "press_key", "press_key"])
+        self.assertEqual(
+            [action.name for action in device.actions],
+            ["press_key", "press_key", "press_key"],
+        )
         log_text = "\n".join(logs.output)
         self.assertIn("前往放亚努斯(球),第1个", log_text)
         self.assertIn("前往放亚努斯(球),第2个", log_text)
@@ -151,6 +206,8 @@ def _runner(
     matcher: LevelingMatcher,
     *,
     device: DryRunDevice | None = None,
+    rune_solver: FakeRuneSolver | None = None,
+    request_pause=lambda: None,
 ) -> LevelingRunner:
     return LevelingRunner(
         config=load_config(load_local=False),
@@ -159,7 +216,40 @@ def _runner(
         sleeper=NullSleeper(),
         logger=logging.getLogger("test.leveling"),
         window_info=WindowInfo(hwnd=100, title="MapleStory", x=10, y=20, width=800, height=600),
+        request_pause=request_pause,
+        rune_solver=rune_solver,  # type: ignore[arg-type]
     )
+
+
+class FakeRuneSolver:
+    def __init__(self, results: list[RunePressAttempt]) -> None:
+        self.results = results
+        self.config = RuneSolverConfig(max_attempts=len(results), retry_delay_ms=0)
+        self.attempts: list[int] = []
+
+    def trigger_and_press(self, window: WindowInfo, *, attempt: int) -> RunePressAttempt:
+        self.attempts.append(attempt)
+        return self.results[attempt - 1]
+
+
+def _match() -> MatchResult:
+    return _match_at(120, 180)
+
+
+def _match_at(x: int, y: int) -> MatchResult:
+    return MatchResult(
+        group="Leveling.Rune",
+        image_path=Path("Rune.bmp"),
+        x=x,
+        y=y,
+        width=20,
+        height=10,
+        score=1.0,
+    )
+
+
+def _screen_like_target() -> MoveTarget:
+    return MoveTarget(x=144, y=1866, x_tolerance=2, y_tolerance=3)
 
 
 if __name__ == "__main__":

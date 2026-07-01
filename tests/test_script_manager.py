@@ -53,7 +53,7 @@ class ScriptManagerTests(unittest.TestCase):
         self.assertEqual(scripts[6]["defaultOptions"]["captureIntervalSeconds"], 5.0)
         self.assertEqual(
             scripts[6]["defaultOptions"]["modelPath"],
-            r"protype\RuneTrainPhase5Output\model\rune_template_model.npz",
+            r"assets\Rune\rune_template_model.npz",
         )
 
     def test_script_logger_uses_unique_file_per_run(self) -> None:

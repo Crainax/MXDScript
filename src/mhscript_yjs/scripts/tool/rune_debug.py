@@ -37,7 +37,8 @@ DIRECTION_KEYS = {
     "unknown": "?",
 }
 SLOT_OFFSETS = (-138, -46, 46, 138)
-DEFAULT_RUNE_MODEL_PATH = (
+DEFAULT_RUNE_MODEL_PATH = Path("assets") / "Rune" / "rune_template_model.npz"
+LEGACY_RUNE_MODEL_PATH = (
     Path("protype") / "RuneTrainPhase5Output" / "model" / "rune_template_model.npz"
 )
 MODEL_TOP_SCORE_THRESHOLD = 0.55
@@ -236,7 +237,13 @@ def _should_use_expanded_panel(
 
 
 def default_rune_model_path() -> Path:
-    return (project_root() / DEFAULT_RUNE_MODEL_PATH).resolve()
+    preferred = (project_root() / DEFAULT_RUNE_MODEL_PATH).resolve()
+    if preferred.exists():
+        return preferred
+    legacy = (project_root() / LEGACY_RUNE_MODEL_PATH).resolve()
+    if legacy.exists():
+        return legacy
+    return preferred
 
 
 def load_rune_recognizer(model_path: Path | None = None) -> RuneModelRecognizer | RuneCvRecognizer:

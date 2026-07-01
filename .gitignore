@@ -20,6 +20,8 @@ protype/
 assets/*
 !assets/app_icon.ico
 !assets/app_icon.png
+!assets/Rune/
+!assets/Rune/rune_template_model.npz
 build/
 dist/
 *.spec

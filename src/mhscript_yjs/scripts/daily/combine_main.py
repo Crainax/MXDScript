@@ -5,10 +5,11 @@ import os
 import re
 import sys
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from mhscript_yjs.characters import (
     CharacterPosition,
@@ -32,11 +33,11 @@ from mhscript_yjs.runtime.sound import beep as play_beep
 from mhscript_yjs.runtime.sound import message_beep
 from mhscript_yjs.runtime.timing import NullSleeper, Sleeper
 from mhscript_yjs.scripts.daily.combine_main_source import SOURCE as COMBINE_MAIN_SOURCE
+from mhscript_yjs.scripts.tool.rune_solver import RunePressAttempt, RuneSolver
 from mhscript_yjs.vision.matcher import TemplateMatcher
 from mhscript_yjs.vision.screenshot import MssScreenCapture
 from mhscript_yjs.vision.types import ImageGroup, MatchResult, Region
 from mhscript_yjs.windows.maple import WindowInfo, find_window, refresh_window_info
-
 
 DAILY_SCRIPT_ID = "daily_script"
 DAILY_MATCH_THRESHOLD = 1.0
@@ -58,6 +59,8 @@ HD_REWARD_CHOICE_KEYS = {1: ord("1"), 2: ord("2")}
 HD_REWARD_KEY_POLL_MS = 50
 HD_REWARD_CLAIM_MAX_CLICKS = 10
 HD_REWARD_BUTTON_NEAR_PX = 48
+RUNE_VERIFY_FRAMES = 3
+RUNE_VERIFY_FRAME_DELAY_MS = 300
 
 
 @dataclass(frozen=True)
@@ -153,6 +156,7 @@ class DailyRunner:
         window_info: WindowInfo | None = None,
         capture: MssScreenCapture | None = None,
         request_pause: Callable[[], None] | None = None,
+        rune_solver: RuneSolver | None = None,
     ) -> None:
         self.config = config
         self.device = device
@@ -172,6 +176,7 @@ class DailyRunner:
         self._branch_eval_entries: set[int] = set()
         self._character_controller: CharacterController | None = None
         self._move_only_controller: CharacterController | None = None
+        self._rune_solver = rune_solver
 
     def run(self) -> DailyScriptResult:
         try:
@@ -315,6 +320,9 @@ class DailyRunner:
         if lowered == "clearquest":
             self._run_clear_quest()
             return
+        if lowered == "releaserune":
+            self._release_rune_with_solver()
+            return
         if lowered in {"initializejob", "detectjob"}:
             self._initialize_job()
             return
@@ -324,7 +332,10 @@ class DailyRunner:
             return
         if lowered in {"moveb", "move_b"} and self._run_character_move(move_only=True):
             return
-        if lowered in {"standspell", "lynnstandspell", "larastandspell"} and self._run_character_stand_spell():
+        if (
+            lowered in {"standspell", "lynnstandspell", "larastandspell"}
+            and self._run_character_stand_spell()
+        ):
             return
         if lowered == "beforestart" and self._run_character_before_start():
             return
@@ -620,6 +631,31 @@ class DailyRunner:
         )
         return self.matcher.match_any(group, region)
 
+    def _match_optional(
+        self,
+        name: str,
+        raw_paths: tuple[str, ...],
+        region: Region,
+        threshold: float = DAILY_MATCH_THRESHOLD,
+    ) -> MatchResult | None:
+        self._checkpoint()
+        paths = tuple(
+            path
+            for path in (self._resolve_image_path(raw) for raw in raw_paths)
+            if path.exists()
+        )
+        if not paths:
+            self.logger.debug(
+                "match_optional_skipped_missing_templates name=%s raw_paths=%s",
+                name,
+                raw_paths,
+            )
+            return None
+        return self.matcher.match_any(
+            ImageGroup(name=name, paths=paths, threshold=threshold),
+            region,
+        )
+
     def _set_window_bounds(self, window: WindowInfo, *, initialize: bool) -> None:
         self.window_info = window
         updates = {
@@ -719,7 +755,12 @@ class DailyRunner:
         threshold: float,
     ) -> tuple[MatchResult | None, MatchResult | None]:
         if not hasattr(self.matcher, "match_pixel_groups"):
-            me = self._match_character_image("Character.Me", (r"E:\MHImg\Me.bmp",), region, threshold)
+            me = self._match_character_image(
+                "Character.Me",
+                (r"E:\MHImg\Me.bmp",),
+                region,
+                threshold,
+            )
             anchor = self._match_character_image(
                 "Character.MapAnchor",
                 (r"E:\MHImg\MapAnchor.bmp",),
@@ -744,7 +785,8 @@ class DailyRunner:
         me = next(iter(matches.get("Character.Me", [])), None)
         anchor = next(iter(matches.get("Character.MapAnchor", [])), None)
         self.logger.info(
-            "[Position] pixel_match me=%s anchor=%s threshold=%.3f color_tolerance=%s allowed_bad_pixels=%s",
+            "[Position] pixel_match me=%s anchor=%s threshold=%.3f "
+            "color_tolerance=%s allowed_bad_pixels=%s",
             "yes" if me else "no",
             "yes" if anchor else "no",
             effective_threshold,
@@ -791,7 +833,11 @@ class DailyRunner:
         return True
 
     def _run_character_move(self, *, move_only: bool = False) -> bool:
-        controller = self._active_move_only_controller() if move_only else self._active_character_controller()
+        controller = (
+            self._active_move_only_controller()
+            if move_only
+            else self._active_character_controller()
+        )
         if controller is None:
             return False
         target = MoveTarget(
@@ -811,6 +857,237 @@ class DailyRunner:
                 result.reason,
             )
         return True
+
+    def _release_rune_with_solver(self) -> None:
+        if self._get_timestamp() - float(self.vars.get("RuneCooldown", 0)) <= 900:
+            return
+        rune = self._find_rune_icon("解符文.检测符文")
+        if rune is None:
+            return
+        log_important(self.logger, "[解符文] 检测到符文，开始自动解除")
+        self._solve_rune(rune)
+
+    def _solve_rune(self, rune: MatchResult) -> None:
+        solver = self._get_rune_solver()
+        current_rune = rune
+        at_rune = False
+        last_attempt: RunePressAttempt | None = None
+
+        for attempt in range(1, solver.config.max_attempts + 1):
+            self._checkpoint()
+            if not at_rune:
+                if current_rune is None:
+                    current_rune = self._find_rune_icon("解符文.重试检测符文")
+                if current_rune is None:
+                    log_important(
+                        self.logger,
+                        "[解符文] 重试前符文图标已经消失，视为解除成功",
+                    )
+                    self._mark_rune_solved()
+                    return
+                if not self._move_to_rune_icon(current_rune):
+                    self.logger.warning(
+                        "[解符文] 第 %s/%s 次无法移动到符文位置",
+                        attempt,
+                        solver.config.max_attempts,
+                    )
+                    last_attempt = RunePressAttempt(
+                        status="move_failed",
+                        attempt=attempt,
+                        reason="移动到符文位置失败",
+                    )
+                    self.sleeper.delay_ms(solver.config.retry_delay_ms)
+                    continue
+                at_rune = True
+
+            last_attempt = solver.trigger_and_press(self._current_window_info(), attempt=attempt)
+            if not last_attempt.pressed:
+                log_important(
+                    self.logger,
+                    "[解符文] 第 %s/%s 次未按方向键，原因：%s",
+                    attempt,
+                    solver.config.max_attempts,
+                    last_attempt.reason,
+                )
+                continue
+
+            verified, remaining_rune = self._leave_rune_and_find_remaining()
+            at_rune = False
+            if verified and remaining_rune is None:
+                log_important(
+                    self.logger,
+                    "[解符文] 已解除，方向=%s，尝试次数=%s",
+                    "".join(last_attempt.directions),
+                    attempt,
+                )
+                self._mark_rune_solved()
+                return
+
+            if not verified:
+                log_important(
+                    self.logger,
+                    "[解符文] 第 %s/%s 次按完方向后无法完成验证，暂停等待手动处理",
+                    attempt,
+                    solver.config.max_attempts,
+                )
+                self._pause_for_manual_rune(
+                    RunePressAttempt(
+                        status="verify_failed",
+                        attempt=attempt,
+                        reason="解除后验证失败",
+                    )
+                )
+                return
+
+            log_important(
+                self.logger,
+                "[解符文] 第 %s/%s 次后仍检测到符文，准备重试",
+                attempt,
+                solver.config.max_attempts,
+            )
+            current_rune = remaining_rune
+
+            if attempt < solver.config.max_attempts:
+                self.sleeper.delay_ms(solver.config.retry_delay_ms)
+
+        self._pause_for_manual_rune(last_attempt)
+
+    def _find_rune_icon(self, name: str) -> MatchResult | None:
+        return self._match_optional(
+            name,
+            (r"E:\MHImg\Rune.bmp",),
+            self._region("x1", "y1", "x2", "y2"),
+        )
+
+    def _move_to_rune_icon(self, rune: MatchResult) -> bool:
+        anchor = self._match_optional(
+            "解符文.MapAnchor",
+            (r"E:\MHImg\MapAnchor.bmp",),
+            self._region("x1", "y1", "x2", "y2"),
+        )
+        if anchor is None:
+            self.logger.warning("[解符文] 未识别到 MapAnchor，无法换算符文坐标")
+            return False
+
+        target = self._rune_target_from_matches(rune, anchor)
+        if not self._rune_target_in_detection_region(target):
+            self.logger.warning(
+                "[解符文] 拒绝异常符文坐标 target=(%s,%s)，符文屏幕坐标=(%s,%s)，"
+                "MapAnchor屏幕坐标=(%s,%s)",
+                target.x,
+                target.y,
+                rune.x,
+                rune.y,
+                anchor.x,
+                anchor.y,
+            )
+            return False
+        log_important(
+            self.logger,
+            "[解符文] 移动到符文 target=(%s,%s)，符文屏幕坐标=(%s,%s)，"
+            "MapAnchor屏幕坐标=(%s,%s)",
+            target.x,
+            target.y,
+            rune.x,
+            rune.y,
+            anchor.x,
+            anchor.y,
+        )
+        self.device.release_all_keys()
+        controller = self._active_character_controller()
+        if controller is None:
+            self.logger.warning("[解符文] 角色控制器未初始化，无法移动到符文")
+            return False
+        result = controller.move_to(target)
+        if result.last_position is not None:
+            self._sync_character_position(result.last_position)
+        if not result.reached:
+            self.logger.warning(
+                "[解符文] 移动到符文未完成，target=(%s,%s)，原因=%s",
+                target.x,
+                target.y,
+                result.reason,
+            )
+            return False
+        return True
+
+    def _rune_target_from_matches(self, rune: MatchResult, anchor: MatchResult) -> MoveTarget:
+        return MoveTarget(
+            x=int(rune.x - anchor.x),
+            y=int(rune.y - anchor.y),
+            x_tolerance=2,
+            y_tolerance=3,
+        )
+
+    def _rune_target_in_detection_region(self, target: MoveTarget) -> bool:
+        return -50 <= target.x <= 450 and -50 <= target.y <= 380
+
+    def _leave_rune_and_find_remaining(self) -> tuple[bool, MatchResult | None]:
+        if not self._move_to_rune_verify_position():
+            return False, None
+
+        for index in range(RUNE_VERIFY_FRAMES):
+            remaining = self._find_rune_icon("解符文.验证符文是否还存在")
+            if remaining is not None:
+                return True, remaining
+            if index < RUNE_VERIFY_FRAMES - 1:
+                self.sleeper.delay_ms(RUNE_VERIFY_FRAME_DELAY_MS)
+        return True, None
+
+    def _move_to_rune_verify_position(self) -> bool:
+        controller = self._active_character_controller()
+        if controller is None:
+            self.logger.warning("[解符文] 角色控制器未初始化，无法离开符文位置验证")
+            return False
+        position = controller.locate(recover=True, use_cache=False)
+        if position is None:
+            self.logger.warning("[解符文] 无法定位角色，不能离开符文位置验证")
+            return False
+        offset = 24 if position.x < 250 else -24
+        target = MoveTarget(
+            x=position.x + offset,
+            y=position.y,
+            x_tolerance=4,
+            y_tolerance=3,
+        )
+        result = controller.move_to(target)
+        if result.last_position is not None:
+            self._sync_character_position(result.last_position)
+        if not result.reached:
+            self.logger.warning("[解符文] 离开符文位置验证失败：%s", result.reason)
+            return False
+        self.sleeper.delay_ms(300)
+        return True
+
+    def _mark_rune_solved(self) -> None:
+        self.vars["RuneCooldown"] = self._get_timestamp()
+        self.vars["lastCheckTime"] = 0
+
+    def _pause_for_manual_rune(self, last_attempt: RunePressAttempt | None) -> None:
+        reason = last_attempt.reason if last_attempt is not None else "未知原因"
+        log_important(
+            self.logger,
+            "[解符文] 自动解除连续失败，原因：%s。已暂停，请手动解除。",
+            reason,
+        )
+        message_beep(logger=self.logger)
+        for frequency in (500, 350, 500, 350, 650):
+            play_beep(frequency, 160, logger=self.logger)
+        self.request_pause()
+        self.control.wait_if_paused()
+
+    def _get_rune_solver(self) -> RuneSolver:
+        if self._rune_solver is not None:
+            return self._rune_solver
+        if self.capture is None:
+            raise RuntimeError("Rune solver requires a screen capture provider.")
+        self._rune_solver = RuneSolver(
+            device=self.device,
+            sleeper=self.sleeper,
+            logger=self.logger,
+            capture=self.capture,
+        )
+        return self._rune_solver
 
     def _active_move_only_controller(self) -> CharacterController | None:
         job = self._active_job()
@@ -1285,7 +1562,9 @@ class DailyRunner:
                 attempt,
             )
             self.sleeper.delay_ms(250)
-        raise RuntimeError("ReceiveQuest failed: ReceivedMark was not detected after clicking ReceiveButton.")
+        raise RuntimeError(
+            "ReceiveQuest failed: ReceivedMark was not detected after clicking ReceiveButton."
+        )
 
     def _match_scheduler_ui(self) -> MatchResult | None:
         return self._match_combine_main_image(
@@ -1392,7 +1671,12 @@ class DailyRunner:
     def _run_gugu(self) -> None:
         self.vars["wJam"] = 0
         while True:
-            if self._match_to("Gugu Mark2", (r"E:\MHImg\UI\Daily\Gugu\Mark2.bmp",), "logoX", "logoY"):
+            if self._match_to(
+                "Gugu Mark2",
+                (r"E:\MHImg\UI\Daily\Gugu\Mark2.bmp",),
+                "logoX",
+                "logoY",
+            ):
                 if not self._close_stop_chat_for_gugu():
                     return
                 if not self._complete_gugu_favor_flow():

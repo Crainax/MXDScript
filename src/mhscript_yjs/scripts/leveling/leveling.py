@@ -16,12 +16,11 @@ from mhscript_yjs.drivers.yjs import YjsDevice
 from mhscript_yjs.runtime.control import RunControl, StopRequested
 from mhscript_yjs.runtime.logging import log_important
 from mhscript_yjs.runtime.timing import NullSleeper, Sleeper
-from mhscript_yjs.scripts.daily.combine_main import DAILY_MATCH_THRESHOLD, DailyRunner
+from mhscript_yjs.scripts.daily.combine_main import DailyRunner
+from mhscript_yjs.scripts.tool.rune_solver import RuneSolver
 from mhscript_yjs.vision.matcher import TemplateMatcher
 from mhscript_yjs.vision.screenshot import MssScreenCapture
-from mhscript_yjs.vision.types import ImageGroup, MatchResult, Region
 from mhscript_yjs.windows.maple import WindowInfo
-
 
 LEVELING_SCRIPT_ID = "leveling"
 LEVELING_SCRIPT_NAME = "练级"
@@ -65,6 +64,7 @@ class LevelingRunner(DailyRunner):
         window_info: WindowInfo | None = None,
         capture: MssScreenCapture | None = None,
         request_pause: Callable[[], None] | None = None,
+        rune_solver: RuneSolver | None = None,
     ) -> None:
         super().__init__(
             config=config,
@@ -77,6 +77,7 @@ class LevelingRunner(DailyRunner):
             window_info=window_info,
             capture=capture,
             request_pause=request_pause,
+            rune_solver=rune_solver,
         )
         self.actions = CharacterActions(device, sleeper, logger)
 
@@ -159,7 +160,10 @@ class LevelingRunner(DailyRunner):
             (r"E:\MHImg\Common\1C.bmp",),
             self._region("x3", "y3", "xEnd", "yEnd"),
         )
-        if self._get_timestamp() - float(self.vars.get("fountainTime", 0)) > 55 or fountain_available:
+        if (
+            self._get_timestamp() - float(self.vars.get("fountainTime", 0)) > 55
+            or fountain_available
+        ):
             self._place_fountain(map_config)
             return
 
@@ -235,7 +239,12 @@ class LevelingRunner(DailyRunner):
     def _process_ball_logic(self, map_config: LevelingMapConfig) -> None:
         map_id = int(self.vars.get("map", 0))
         if map_id in {111, 121}:
-            self._place_yanus_ball(1, map_config.attack_x - 31, map_config.attack_y - 2, update_timer=True)
+            self._place_yanus_ball(
+                1,
+                map_config.attack_x - 31,
+                map_config.attack_y - 2,
+                update_timer=True,
+            )
             self._place_yanus_ball(2, map_config.attack_x - 51, map_config.attack_y - 2)
         elif map_id == 122:
             self._place_yanus_ball(1, -81, 97, update_timer=True)
@@ -246,7 +255,12 @@ class LevelingRunner(DailyRunner):
             self._place_yanus_ball(2, -44, 106)
             self._place_yanus_ball(3, -90, 106)
         elif map_id == 101:
-            self._place_yanus_ball(1, map_config.attack_x + 36, map_config.attack_y, update_timer=True)
+            self._place_yanus_ball(
+                1,
+                map_config.attack_x + 36,
+                map_config.attack_y,
+                update_timer=True,
+            )
         elif map_id == 161:
             self._place_yanus_ball(
                 1,
@@ -308,7 +322,10 @@ class LevelingRunner(DailyRunner):
                 if target_x <= -39 and position.x >= -7:
                     self._move_via_portal(28, 125, -94, 82)
                 elif target_x >= -7 and position.x <= -39:
-                    if self._get_timestamp() - float(self.vars.get("pick1Time", 0)) > 65 and target_y >= 105:
+                    if (
+                        self._get_timestamp() - float(self.vars.get("pick1Time", 0)) > 65
+                        and target_y >= 105
+                    ):
                         self.vars["pick1Time"] = self._get_timestamp()
                     else:
                         self._move_via_portal(-78, 125, 39, 80)
@@ -335,7 +352,11 @@ class LevelingRunner(DailyRunner):
         self.actions.hold_random("Up", 120, 122)
         self.sleeper.delay_random_ms(231, 234)
         position = self._locate_character()
-        if position is not None and abs(position.x - exit_x) <= 12 and abs(position.y - exit_y) <= 3:
+        if (
+            position is not None
+            and abs(position.x - exit_x) <= 12
+            and abs(position.y - exit_y) <= 3
+        ):
             self.logger.info("[Leveling] 传送点通过完成：(%s,%s)", position.x, position.y)
 
     def _move_to(self, x: int, y: int, *, x_tolerance: int, y_tolerance: int = 0) -> None:
@@ -374,17 +395,17 @@ class LevelingRunner(DailyRunner):
             self.sleeper.delay_random_ms(39, 42)
 
     def _release_rune_if_ready(self) -> None:
-        if self._get_timestamp() - float(self.vars.get("RuneCooldown", 0)) <= 900:
-            return
-        rune = self._match_optional(
-            "Leveling.Rune",
-            (r"E:\MHImg\Rune.bmp",),
-            self._region("x1", "y1", "x2", "y2"),
-        )
-        if rune is None:
-            return
-        log_important(self.logger, "前往解轮")
-        self.execute_sub("ReleaseRune")
+        self._release_rune_with_solver()
+
+    def _move_to_rune_verify_position(self) -> bool:
+        try:
+            map_config = self._get_map_config()
+        except RuntimeError as exc:
+            self.logger.warning("[解符文] 无法选择验证位置：%s", exc)
+            return False
+        self._aut_navi(map_config.attack_x, map_config.attack_y, tolerance=4, y_tolerance=0)
+        self.sleeper.delay_ms(300)
+        return True
 
     def _confirm_aut_map(self) -> int:
         self.vars["map"] = 0
@@ -462,20 +483,6 @@ class LevelingRunner(DailyRunner):
         if map_id == -232:
             return LevelingMapConfig(152, 112, 1, 3, 102, 47, 94, 1, 115, 100, 68, 94)
         raise RuntimeError(f"Unsupported leveling map: {map_id}")
-
-    def _match_optional(
-        self,
-        name: str,
-        raw_paths: tuple[str, ...],
-        region: Region,
-        threshold: float = DAILY_MATCH_THRESHOLD,
-    ) -> MatchResult | None:
-        self._checkpoint()
-        paths = tuple(path for path in (self._resolve_image_path(raw) for raw in raw_paths) if path.exists())
-        if not paths:
-            self.logger.debug("leveling_match_skipped_missing_templates name=%s raw_paths=%s", name, raw_paths)
-            return None
-        return self.matcher.match_any(ImageGroup(name=name, paths=paths, threshold=threshold), region)
 
     def _leveling_result(self, exit_reason: str) -> LevelingScriptResult:
         return LevelingScriptResult(

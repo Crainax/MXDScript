@@ -21,7 +21,10 @@ class FakeMatcher:
     def match_any(self, group: ImageGroup, region: Region) -> MatchResult | None:
         self.calls.extend(str(path) for path in group.paths)
         self.thresholds.append(group.threshold)
-        lara_feature = next((path for path in group.paths if "\\Lara\\Feature.bmp" in str(path)), None)
+        lara_feature = next(
+            (path for path in group.paths if "\\Lara\\Feature.bmp" in str(path)),
+            None,
+        )
         if lara_feature is None:
             return None
         return MatchResult(
@@ -61,7 +64,13 @@ class SequenceMatcher:
             score=1.0,
         )
 
-    def match_all(self, group: ImageGroup, region: Region, *, limit: int = 200) -> list[MatchResult]:
+    def match_all(
+        self,
+        group: ImageGroup,
+        region: Region,
+        *,
+        limit: int = 200,
+    ) -> list[MatchResult]:
         self.calls.append(group.name)
         self.thresholds.append(group.threshold)
         self.regions.append(region)
@@ -118,6 +127,21 @@ class LynnSkillMatcher:
 
 
 class DailyScriptTests(unittest.TestCase):
+    def test_release_rune_sub_uses_python_solver_instead_of_legacy_pause(self) -> None:
+        runner = DailyRunner(
+            config=load_config(load_local=False),
+            device=DryRunDevice(),
+            matcher=FakeMatcher(),  # type: ignore[arg-type]
+            sleeper=NullSleeper(),
+            logger=logging.getLogger("test.daily_script"),
+        )
+        calls: list[str] = []
+        runner._release_rune_with_solver = lambda: calls.append("solver")  # type: ignore[method-assign]
+
+        runner.execute_sub("ReleaseRune")
+
+        self.assertEqual(calls, ["solver"])
+
     def test_initializes_job_even_when_all_modules_are_disabled(self) -> None:
         device = DryRunDevice()
         runner = DailyRunner(
@@ -570,7 +594,14 @@ class DailyScriptTests(unittest.TestCase):
             ),  # type: ignore[arg-type]
             sleeper=NullSleeper(),
             logger=logging.getLogger("test.daily_script"),
-            window_info=WindowInfo(hwnd=100, title="MapleStory", x=30, y=1721, width=1366, height=768),
+            window_info=WindowInfo(
+                hwnd=100,
+                title="MapleStory",
+                x=30,
+                y=1721,
+                width=1366,
+                height=768,
+            ),
         )
         runner._initialize_window()  # noqa: SLF001
         runner.vars.update(
@@ -602,7 +633,14 @@ class DailyScriptTests(unittest.TestCase):
             matcher=LynnSkillMatcher({"Lynn.D"}),  # type: ignore[arg-type]
             sleeper=NullSleeper(),
             logger=logging.getLogger("test.daily_script"),
-            window_info=WindowInfo(hwnd=100, title="MapleStory", x=30, y=1721, width=1366, height=768),
+            window_info=WindowInfo(
+                hwnd=100,
+                title="MapleStory",
+                x=30,
+                y=1721,
+                width=1366,
+                height=768,
+            ),
         )
         runner._initialize_window()  # noqa: SLF001
         runner.vars.update(
@@ -644,7 +682,14 @@ class DailyScriptTests(unittest.TestCase):
             ),  # type: ignore[arg-type]
             sleeper=NullSleeper(),
             logger=logging.getLogger("test.daily_script"),
-            window_info=WindowInfo(hwnd=100, title="MapleStory", x=30, y=1721, width=1366, height=768),
+            window_info=WindowInfo(
+                hwnd=100,
+                title="MapleStory",
+                x=30,
+                y=1721,
+                width=1366,
+                height=768,
+            ),
         )
         runner._initialize_window()  # noqa: SLF001
         runner.vars.update(
@@ -676,7 +721,14 @@ class DailyScriptTests(unittest.TestCase):
             matcher=LynnSkillMatcher({"Common.4"}),  # type: ignore[arg-type]
             sleeper=NullSleeper(),
             logger=logging.getLogger("test.daily_script"),
-            window_info=WindowInfo(hwnd=100, title="MapleStory", x=30, y=1721, width=1366, height=768),
+            window_info=WindowInfo(
+                hwnd=100,
+                title="MapleStory",
+                x=30,
+                y=1721,
+                width=1366,
+                height=768,
+            ),
         )
         runner._initialize_window()  # noqa: SLF001
         runner.vars.update(

@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-import os
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from mhscript_yjs.gui.api import GuiApi
 from mhscript_yjs.runtime.app_paths import settings_path
@@ -18,9 +19,18 @@ class GuiApiTests(unittest.TestCase):
         self.assertTrue(state["ok"])
         self.assertEqual(state["app"]["title"], "MXD脚本库")
         self.assertEqual(state["runtime"]["logDir"], str(appdata / "MXDScriptLibrary" / "logs"))
-        self.assertEqual(len(state["runtime"]["scripts"]), 6)
+        self.assertEqual(len(state["runtime"]["scripts"]), 7)
         self.assertEqual(state["settings"]["shortcuts"]["leveling"], "Ctrl+F10")
         self.assertEqual(state["settings"]["shortcuts"]["open_package"], "")
+        self.assertEqual(state["settings"]["shortcuts"]["rune_capture"], "Ctrl+F7")
+        self.assertEqual(
+            state["settings"]["scriptOptions"]["rune_capture"]["outputDir"],
+            r"protype\RuneInstance",
+        )
+        self.assertEqual(
+            state["settings"]["scriptOptions"]["rune_capture"]["captureIntervalSeconds"],
+            5.0,
+        )
 
     def test_save_shortcuts_rejects_escape(self) -> None:
         with _temporary_local_appdata():
@@ -107,13 +117,14 @@ class GuiApiTests(unittest.TestCase):
             )
             state = GuiApi().get_state()
 
+        image_options = state["settings"]["scriptOptions"]["image_recognition"]
         self.assertTrue(response["ok"])
         self.assertEqual(
-            state["settings"]["scriptOptions"]["image_recognition"]["imagePath"],
+            image_options["imagePath"],
             r"D:\Project\MXDScript\assets\CombineMain\SchedulerUI.png",
         )
-        self.assertEqual(state["settings"]["scriptOptions"]["image_recognition"]["matchThreshold"], 0.0)
-        self.assertEqual(state["settings"]["scriptOptions"]["image_recognition"]["intervalSeconds"], 0.1)
+        self.assertEqual(image_options["matchThreshold"], 0.0)
+        self.assertEqual(image_options["intervalSeconds"], 0.1)
 
     def test_debug_script_interval_is_clamped_independently_from_threshold(self) -> None:
         with _temporary_local_appdata():
@@ -124,9 +135,10 @@ class GuiApiTests(unittest.TestCase):
             )
             state = GuiApi().get_state()
 
+        detector_options = state["settings"]["scriptOptions"]["coordinate_detector"]
         self.assertTrue(response["ok"])
-        self.assertEqual(state["settings"]["scriptOptions"]["coordinate_detector"]["intervalSeconds"], 5.0)
-        self.assertEqual(state["settings"]["scriptOptions"]["coordinate_detector"]["matchThreshold"], 1.0)
+        self.assertEqual(detector_options["intervalSeconds"], 5.0)
+        self.assertEqual(detector_options["matchThreshold"], 1.0)
 
     def test_coordinate_mover_options_persist_target_and_mode(self) -> None:
         with _temporary_local_appdata():
@@ -141,6 +153,31 @@ class GuiApiTests(unittest.TestCase):
         self.assertEqual(state["settings"]["scriptOptions"]["coordinate_mover"]["targetX"], "123")
         self.assertEqual(state["settings"]["scriptOptions"]["coordinate_mover"]["targetY"], "45")
         self.assertEqual(state["settings"]["scriptOptions"]["coordinate_mover"]["moveMode"], "Move")
+
+    def test_rune_capture_options_persist_directory_and_interval(self) -> None:
+        with _temporary_local_appdata():
+            api = GuiApi()
+            response = api.save_script_options(
+                "rune_capture",
+                {"outputDir": r"D:\RuneSamples", "captureIntervalSeconds": 12.5},
+            )
+            state = GuiApi().get_state()
+
+        rune_options = state["settings"]["scriptOptions"]["rune_capture"]
+        self.assertTrue(response["ok"])
+        self.assertEqual(rune_options["outputDir"], r"D:\RuneSamples")
+        self.assertEqual(rune_options["captureIntervalSeconds"], 12.5)
+
+    def test_select_directory_returns_dialog_path(self) -> None:
+        with (
+            _temporary_local_appdata(),
+            patch("mhscript_yjs.gui.api._select_directory", return_value=Path(r"D:\RuneSamples")),
+        ):
+            response = GuiApi().select_directory(r"D:\Initial")
+
+        self.assertTrue(response["ok"])
+        self.assertEqual(response["path"], r"D:\RuneSamples")
+
 
 class _temporary_local_appdata:
     def __init__(self) -> None:

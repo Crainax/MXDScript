@@ -7,16 +7,22 @@ from typing import Any
 
 from mhscript_yjs.core.config import ProjectConfig
 from mhscript_yjs.runtime.control import RunControl
+from mhscript_yjs.runtime.timing import NullSleeper, Sleeper
 from mhscript_yjs.scripts.daily.combine_main import (
     DAILY_SCRIPT_ID,
     DEFAULT_DAILY_OPTIONS,
+)
+from mhscript_yjs.scripts.daily.combine_main import (
     create_runner as create_daily_runner,
 )
 from mhscript_yjs.scripts.leveling.leveling import (
     LEVELING_SCRIPT_ID,
     LEVELING_SCRIPT_NAME,
+)
+from mhscript_yjs.scripts.leveling.leveling import (
     create_runner as create_leveling_runner,
 )
+from mhscript_yjs.scripts.placeholders import run_placeholder_script
 from mhscript_yjs.scripts.tool.coordinate_mover import (
     COORDINATE_MOVER_SCRIPT_ID,
     DEFAULT_COORDINATE_MOVER_OPTIONS,
@@ -31,6 +37,11 @@ from mhscript_yjs.scripts.tool.image_debug import (
     run_image_recognition,
 )
 from mhscript_yjs.scripts.tool.open_package import create_runner as create_open_package_runner
+from mhscript_yjs.scripts.tool.rune_capture import (
+    DEFAULT_RUNE_CAPTURE_OPTIONS,
+    RUNE_CAPTURE_SCRIPT_ID,
+    run_rune_capture,
+)
 
 
 def _noop_emit_data(payload: Mapping[str, Any]) -> None:
@@ -151,6 +162,18 @@ def get_script_definitions() -> tuple[ScriptDefinition, ...]:
             requires_mouse_precision=True,
             default_options=DEFAULT_COORDINATE_MOVER_OPTIONS,
         ),
+        ScriptDefinition(
+            id=RUNE_CAPTURE_SCRIPT_ID,
+            name="符文截图采样",
+            category="测试",
+            description="定时截取游戏窗口，并实时显示四个符文槽位裁剪和识别标签。",
+            module="mhscript_yjs.scripts.tool.rune_capture",
+            default_shortcut="Ctrl+F7",
+            runner=_run_rune_capture,
+            placeholder=False,
+            requires_mouse_precision=False,
+            default_options=DEFAULT_RUNE_CAPTURE_OPTIONS,
+        ),
         _placeholder(
             script_id="event_placeholder",
             name="活动脚本占位",
@@ -194,6 +217,15 @@ def _run_coordinate_detector(context: ScriptRunContext) -> ScriptRunResult:
 
 def _run_coordinate_mover(context: ScriptRunContext) -> ScriptRunResult:
     result = run_coordinate_mover(context)
+    return ScriptRunResult(
+        exit_reason=result.exit_reason,
+        iterations=result.iterations,
+        details=dict(result.details),
+    )
+
+
+def _run_rune_capture(context: ScriptRunContext) -> ScriptRunResult:
+    result = run_rune_capture(context)
     return ScriptRunResult(
         exit_reason=result.exit_reason,
         iterations=result.iterations,

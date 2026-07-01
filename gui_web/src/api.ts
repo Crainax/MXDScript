@@ -7,6 +7,7 @@ interface ApiResponse {
   runtime?: RuntimeState;
   settings?: AppSettings;
   events?: RuntimeEvent[];
+  path?: string;
 }
 
 const API_BASE = resolveApiBase();
@@ -105,6 +106,17 @@ export async function openPath(path: string): Promise<void> {
   if (!response.ok) {
     throw new Error(response.error ?? "打开路径失败");
   }
+}
+
+export async function selectDirectory(initialPath: string): Promise<string> {
+  const response = await requestJson("/select-directory", {
+    method: "POST",
+    body: JSON.stringify({ initialPath }),
+  });
+  if (!response.ok || typeof response.path !== "string") {
+    throw new Error(response.error ?? "选择文件夹失败");
+  }
+  return response.path;
 }
 
 async function requestJson(path: string, init: RequestInit = {}): Promise<ApiResponse> {

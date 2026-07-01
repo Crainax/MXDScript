@@ -117,6 +117,9 @@ class GuiHttpServer:
                 if parsed.path == "/api/open-path":
                     self._send_json(api.open_path(str(body.get("path", ""))))
                     return
+                if parsed.path == "/api/select-directory":
+                    self._send_json(api.select_directory(str(body.get("initialPath", ""))))
+                    return
 
                 self._send_json(
                     {"ok": False, "error": f"Unknown endpoint: {parsed.path}"},

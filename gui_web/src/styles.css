@@ -434,6 +434,34 @@ h2 {
   background: rgba(255, 255, 255, 0.7);
 }
 
+.path-picker-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 38px;
+  gap: 8px;
+}
+
+.path-picker-row input {
+  cursor: pointer;
+  text-align: left;
+}
+
+.path-picker-button {
+  display: inline-grid;
+  place-items: center;
+  width: 38px;
+  height: 34px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.065);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.path-picker-button:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
 .coordinate-move-panel {
   display: grid;
   gap: 8px;
@@ -525,6 +553,93 @@ h2 {
 
 .debug-empty {
   color: var(--muted);
+}
+
+.rune-capture-result {
+  margin-top: 0;
+}
+
+.rune-preview-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.rune-preview-item {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.16);
+  padding: 8px;
+}
+
+:root[data-theme="light"] .rune-preview-item {
+  background: rgba(15, 23, 42, 0.045);
+}
+
+.rune-preview-item.unknown {
+  border-color: rgba(245, 158, 11, 0.38);
+}
+
+.rune-preview-image {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  aspect-ratio: 19 / 23;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.28);
+  color: var(--muted);
+  font-size: 12px;
+  overflow: hidden;
+}
+
+.rune-preview-image img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  image-rendering: auto;
+}
+
+.rune-preview-label {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  color: var(--text);
+  font-family: "Cascadia Mono", "Consolas", monospace;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.rune-preview-label span,
+.rune-preview-label small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rune-preview-label small {
+  color: var(--muted);
+}
+
+.rune-capture-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  color: var(--muted);
+  font-family: "Cascadia Mono", "Consolas", monospace;
+  font-size: 12px;
+}
+
+.rune-capture-path {
+  min-width: 0;
+  color: var(--muted);
+  font-family: "Cascadia Mono", "Consolas", monospace;
+  font-size: 12px;
+  overflow-wrap: anywhere;
 }
 
 .coordinate-labels {

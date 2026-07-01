@@ -5,6 +5,7 @@ import math
 import os
 import subprocess
 import sys
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
@@ -12,11 +13,20 @@ from mhscript_yjs import __version__
 from mhscript_yjs.runtime.app_paths import logs_dir, settings_path
 from mhscript_yjs.runtime.global_hotkeys import GlobalHotkeyService, HotkeyBinding
 from mhscript_yjs.runtime.script_manager import ScriptManager
-from mhscript_yjs.runtime.shortcuts import ShortcutError, normalize_shortcut_map, shortcut_to_win_hotkey
+from mhscript_yjs.runtime.shortcuts import (
+    ShortcutError,
+    normalize_shortcut_map,
+    shortcut_to_win_hotkey,
+)
 
 
 class GuiApi:
-    def __init__(self, manager: ScriptManager | None = None, *, enable_hotkeys: bool = False) -> None:
+    def __init__(
+        self,
+        manager: ScriptManager | None = None,
+        *,
+        enable_hotkeys: bool = False,
+    ) -> None:
         self.manager = manager or ScriptManager()
         self._hotkeys: GlobalHotkeyService | None = (
             GlobalHotkeyService() if enable_hotkeys else None
@@ -117,6 +127,12 @@ class GuiApi:
     def open_path(self, path: str) -> dict[str, Any]:
         return self._call(lambda: _open_path(Path(path)))
 
+    def select_directory(self, initial_path: str = "") -> dict[str, Any]:
+        try:
+            return {"ok": True, "path": str(_select_directory(initial_path))}
+        except Exception as exc:
+            return {"ok": False, "error": f"{exc.__class__.__name__}: {exc}"}
+
     def _call(self, callback: Any) -> dict[str, Any]:
         try:
             result = callback()
@@ -145,15 +161,13 @@ class GuiApi:
 
         shortcuts = data.get("shortcuts")
         if isinstance(shortcuts, dict):
-            try:
+            with suppress(ShortcutError):
                 defaults["shortcuts"].update(
                     normalize_shortcut_map(
                         (definition.id for definition in self.manager.definitions),
                         {str(key): str(value) for key, value in shortcuts.items()},
                     )
                 )
-            except ShortcutError:
-                pass
         if defaults["shortcuts"].get("open_package") == "F10":
             defaults["shortcuts"]["open_package"] = ""
         _clear_duplicate_shortcuts(self.manager, defaults["shortcuts"])
@@ -331,6 +345,29 @@ def _open_path(path: Path) -> dict[str, Any]:
     else:
         subprocess.Popen(["xdg-open", str(path)])
     return {"path": str(path)}
+
+
+def _select_directory(initial_path: str) -> Path:
+    import tkinter as tk
+    from tkinter import filedialog
+
+    cleaned = initial_path.strip().strip('"').strip("'")
+    initial = Path(cleaned) if cleaned else Path.cwd()
+    if not initial.exists():
+        initial = initial.parent if initial.parent.exists() else Path.cwd()
+
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+    try:
+        selected = filedialog.askdirectory(initialdir=str(initial), mustexist=False)
+    finally:
+        root.destroy()
+    if selected:
+        return Path(selected).resolve()
+    if cleaned:
+        return Path(cleaned).resolve()
+    return initial.resolve()
 
 
 def _package_version() -> str:

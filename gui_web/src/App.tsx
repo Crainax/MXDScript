@@ -33,6 +33,7 @@ import {
   saveRunOptions,
   saveScriptOptions,
   saveShortcuts,
+  selectDirectory,
   startScript,
   stopScript,
 } from "./api";
@@ -53,6 +54,7 @@ const DAILY_SCRIPT_ID = "daily_script";
 const IMAGE_RECOGNITION_SCRIPT_ID = "image_recognition";
 const COORDINATE_DETECTOR_SCRIPT_ID = "coordinate_detector";
 const COORDINATE_MOVER_SCRIPT_ID = "coordinate_mover";
+const RUNE_CAPTURE_SCRIPT_ID = "rune_capture";
 const DAILY_OPTION_ITEMS = [
   { key: "dailyQuest", label: "日常任务" },
   { key: "gugu", label: "菇菇神社" },
@@ -434,6 +436,14 @@ export function App() {
                 options={selectedScriptOptions}
                 data={scriptData[selectedScript.id]}
                 onChange={updateSelectedScriptOption}
+              />
+            ) : null}
+            {selectedScript?.id === RUNE_CAPTURE_SCRIPT_ID ? (
+              <RuneCaptureOptionsPanel
+                options={selectedScriptOptions}
+                data={scriptData[selectedScript.id]}
+                onChange={updateSelectedScriptOption}
+                onMessage={setMessage}
               />
             ) : null}
             {message ? (
@@ -904,6 +914,95 @@ function CoordinateMoverOptionsPanel(props: {
   );
 }
 
+function RuneCaptureOptionsPanel(props: {
+  options: Record<string, ScriptOptionValue>;
+  data?: Record<string, unknown>;
+  onChange: (key: string, value: ScriptOptionValue) => void;
+  onMessage: (message: string | null) => void;
+}) {
+  const outputDirValue = optionString(props.options.outputDir, "protype\\RuneInstance");
+  const intervalValue = optionNumber(props.options.captureIntervalSeconds, 5);
+  const [outputDirText, setOutputDirText] = useState(outputDirValue);
+  const [intervalText, setIntervalText] = useState(formatThreshold(intervalValue));
+
+  useEffect(() => {
+    setOutputDirText(outputDirValue);
+  }, [outputDirValue]);
+
+  useEffect(() => {
+    setIntervalText(formatThreshold(intervalValue));
+  }, [intervalValue]);
+
+  const browseOutputDir = useCallback(async () => {
+    try {
+      const selectedPath = await selectDirectory(outputDirText);
+      setOutputDirText(selectedPath);
+      props.onChange("outputDir", selectedPath);
+      props.onMessage(null);
+    } catch (error) {
+      props.onMessage(error instanceof Error ? error.message : "选择文件夹失败");
+    }
+  }, [outputDirText, props]);
+
+  const commitInterval = useCallback(() => {
+    const nextValue = Number(intervalText);
+    if (!Number.isFinite(nextValue)) {
+      setIntervalText(formatThreshold(intervalValue));
+      return;
+    }
+    const clampedValue = clampCaptureIntervalSeconds(nextValue);
+    setIntervalText(formatThreshold(clampedValue));
+    props.onChange("captureIntervalSeconds", clampedValue);
+  }, [intervalText, intervalValue, props]);
+
+  return (
+    <section className="debug-options-panel">
+      <div className="panel-header">
+        <div>
+          <div className="category-label">脚本配置</div>
+          <h2>符文截图采样</h2>
+        </div>
+      </div>
+      <RuneCaptureResult data={props.data} />
+      <label className="debug-field">
+        <span>存截图文件夹</span>
+        <div className="path-picker-row">
+          <input
+            type="text"
+            value={outputDirText}
+            readOnly
+            title="选择保存截图的文件夹"
+            onClick={() => void browseOutputDir()}
+          />
+          <button
+            type="button"
+            className="path-picker-button"
+            title="选择文件夹"
+            onClick={() => void browseOutputDir()}
+          >
+            <FolderOpen size={16} />
+          </button>
+        </div>
+      </label>
+      <label className="debug-field compact">
+        <span>截图间隔</span>
+        <input
+          type="text"
+          inputMode="decimal"
+          value={intervalText}
+          onBlur={commitInterval}
+          onChange={(event) => setIntervalText(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.currentTarget.blur();
+            }
+          }}
+        />
+      </label>
+    </section>
+  );
+}
+
 function ImageRecognitionResult({ data }: { data?: Record<string, unknown> }) {
   const matches = payloadArray(data, "matches");
   const message = payloadString(data, "message", "等待运行...");
@@ -999,6 +1098,55 @@ function CoordinateMoverResult({ data }: { data?: Record<string, unknown> }) {
         <div className="debug-anchor-status">{formatMoveStatus(moveStatus)}</div>
       ) : (
         <div className="debug-empty">填写坐标后点击开始</div>
+      )}
+    </div>
+  );
+}
+
+function RuneCaptureResult({ data }: { data?: Record<string, unknown> }) {
+  const slots = payloadArray(data, "slots");
+  const previewSlots = Array.from({ length: 4 }, (_, index) => {
+    return slots.find((slot) => payloadNumber(slot, "slot") === index) ?? slots[index] ?? null;
+  });
+  const message = payloadString(data, "message", "等待运行...");
+  const updatedAt = payloadString(data, "updatedAt", "");
+  const capturePath = payloadString(data, "capturePath", "");
+  const outputDir = payloadString(data, "outputDir", "");
+  const savedCount = payloadNumber(data, "savedCount");
+  const predictionScore = payloadNumber(data, "predictionScore");
+  return (
+    <div className="debug-result rune-capture-result">
+      <div className="debug-result-title">
+        <span>{message}</span>
+        {updatedAt ? <span>{updatedAt}</span> : null}
+      </div>
+      <div className="rune-preview-grid">
+        {previewSlots.map((slot, index) => {
+          const label = slot ? payloadString(slot, "label", "unknown") : "unknown";
+          const direction = slot ? payloadString(slot, "direction", "unknown") : "unknown";
+          const cropDataUrl = slot ? payloadString(slot, "cropDataUrl", "") : "";
+          const confidence = slot ? payloadNumber(slot, "confidence") : null;
+          return (
+            <div className={`rune-preview-item ${direction === "unknown" ? "unknown" : ""}`} key={index}>
+              <div className="rune-preview-image">
+                {cropDataUrl ? <img src={cropDataUrl} alt={`Rune slot ${index + 1}`} /> : <span>无截图</span>}
+              </div>
+              <div className="rune-preview-label">
+                <span>label: {label}</span>
+                <small>{formatConfidence(confidence)}</small>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <div className="rune-capture-meta">
+        <span>已保存: {formatMaybeNumber(savedCount)}</span>
+        <span>总分: {formatScore(predictionScore)}</span>
+      </div>
+      {capturePath || outputDir ? (
+        <div className="rune-capture-path">{capturePath || outputDir}</div>
+      ) : (
+        <div className="debug-empty">启动脚本后会显示最后一张截图的四个裁剪区域</div>
       )}
     </div>
   );
@@ -1205,6 +1353,10 @@ function clampIntervalSeconds(value: number): number {
   return Math.min(10, Math.max(0.05, value));
 }
 
+function clampCaptureIntervalSeconds(value: number): number {
+  return Math.min(3600, Math.max(0.5, value));
+}
+
 function formatThreshold(value: number): string {
   return String(Number(value.toFixed(3)));
 }
@@ -1214,8 +1366,8 @@ function payloadString(payload: Record<string, unknown> | undefined, key: string
   return typeof value === "string" ? value : fallback;
 }
 
-function payloadNumber(payload: Record<string, unknown>, key: string): number | null {
-  const value = payload[key];
+function payloadNumber(payload: Record<string, unknown> | undefined | null, key: string): number | null {
+  const value = payload?.[key];
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
@@ -1274,6 +1426,10 @@ function formatMaybeNumber(value: number | null): string {
 
 function formatScore(value: number | null): string {
   return value === null ? "-" : value.toFixed(3);
+}
+
+function formatConfidence(value: number | null): string {
+  return value === null ? "-" : value.toFixed(2);
 }
 
 function normalizeLogLevel(level: string): LogLevelFilter {

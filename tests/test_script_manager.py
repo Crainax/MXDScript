@@ -32,7 +32,7 @@ class ScriptManagerTests(unittest.TestCase):
                     os.environ["LOCALAPPDATA"] = old
 
         scripts = snapshot["scripts"]
-        self.assertEqual(len(scripts), 6)
+        self.assertEqual(len(scripts), 7)
         self.assertEqual(scripts[0]["id"], "leveling")
         self.assertEqual(scripts[0]["name"], "练级")
         self.assertEqual(scripts[0]["defaultShortcut"], "Ctrl+F10")
@@ -47,6 +47,10 @@ class ScriptManagerTests(unittest.TestCase):
         self.assertEqual(scripts[5]["id"], "coordinate_mover")
         self.assertEqual(scripts[5]["defaultShortcut"], "")
         self.assertEqual(scripts[5]["defaultOptions"]["moveMode"], "MoveB")
+        self.assertEqual(scripts[6]["id"], "rune_capture")
+        self.assertEqual(scripts[6]["defaultShortcut"], "Ctrl+F7")
+        self.assertEqual(scripts[6]["defaultOptions"]["outputDir"], r"protype\RuneInstance")
+        self.assertEqual(scripts[6]["defaultOptions"]["captureIntervalSeconds"], 5.0)
 
     def test_script_logger_uses_unique_file_per_run(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -208,7 +212,9 @@ class ScriptManagerTests(unittest.TestCase):
                 manager.resume()
 
                 self.assertTrue(_wait_until(lambda: resumed.is_set()))
-                self.assertTrue(_wait_until(lambda: _status(manager, "pausing_script") == "finished"))
+                self.assertTrue(
+                    _wait_until(lambda: _status(manager, "pausing_script") == "finished")
+                )
             finally:
                 if old is None:
                     os.environ.pop("LOCALAPPDATA", None)

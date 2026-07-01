@@ -1,15 +1,22 @@
 from __future__ import annotations
 
 import logging
+import os
+import tempfile
 import unittest
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from mhscript_yjs.characters import CharacterPosition, LaraController, MoveTarget
+from mhscript_yjs.characters.base import Job
 from mhscript_yjs.core.config import load_config
 from mhscript_yjs.drivers.dry_run import DryRunDevice
+from mhscript_yjs.drivers.keycodes import keycode
 from mhscript_yjs.runtime.timing import NullSleeper
-from mhscript_yjs.scripts.leveling.leveling import LevelingRunner
+from mhscript_yjs.scripts.leveling.leveling import (
+    LevelingRunner,
+    read_leveling_potion_payload,
+)
 from mhscript_yjs.scripts.tool.rune_solver import RunePressAttempt, RuneSolverConfig
 from mhscript_yjs.vision.types import ImageGroup, MatchResult, Region
 from mhscript_yjs.windows.maple import WindowInfo
@@ -196,6 +203,104 @@ class LevelingScriptTests(unittest.TestCase):
 
         self.assertIn("左右晃防呆", "\n".join(logs.output))
 
+    def test_auto_potion_uses_top_row_2_confirms_dialog_and_persists_by_job(self) -> None:
+        with _temporary_local_appdata():
+            device = DryRunDevice()
+            runner = _runner(LevelingMatcher({"Leveling.PotionDialog"}), device=device)
+            runner._initialize_window()  # noqa: SLF001
+            runner.vars["CurrentJob"] = runner.vars["JobLynn"]
+            runner._wall_clock = lambda: 10_000.0  # type: ignore[method-assign]
+
+            runner._use_potion_if_ready()  # noqa: SLF001
+
+            pressed_codes = [
+                int(action.args[0])
+                for action in device.actions
+                if action.name == "press_key"
+            ]
+            self.assertEqual(pressed_codes[:2], [keycode("p"), keycode("2")])
+            self.assertIn(keycode("enter"), pressed_codes)
+            self.assertEqual(
+                read_leveling_potion_payload(Job.LYNN, now=10_000.0)["potionMinutesSinceLastUse"],
+                0,
+            )
+            self.assertIsNone(
+                read_leveling_potion_payload(Job.LARA, now=10_000.0)["potionLastUsedAt"]
+            )
+
+    def test_auto_potion_waits_30_minutes_per_job(self) -> None:
+        with _temporary_local_appdata():
+            device = DryRunDevice()
+            runner = _runner(LevelingMatcher(), device=device)
+            runner._initialize_window()  # noqa: SLF001
+            runner.vars["CurrentJob"] = runner.vars["JobLynn"]
+            clock = 20_000.0
+            runner._wall_clock = lambda: clock  # type: ignore[method-assign]
+
+            runner._use_potion_if_ready()  # noqa: SLF001
+            first_action_count = len(device.actions)
+            clock += 29 * 60
+            runner._wall_clock = lambda: clock  # type: ignore[method-assign]
+            runner._use_potion_if_ready()  # noqa: SLF001
+
+            self.assertEqual(len(device.actions), first_action_count)
+
+            clock += 60
+            runner._wall_clock = lambda: clock  # type: ignore[method-assign]
+            runner._use_potion_if_ready()  # noqa: SLF001
+            self.assertGreater(len(device.actions), first_action_count)
+
+            lara = _runner(LevelingMatcher(), device=DryRunDevice())
+            lara._initialize_window()  # noqa: SLF001
+            lara.vars["CurrentJob"] = lara.vars["JobLara"]
+            lara._wall_clock = lambda: 20_100.0  # type: ignore[method-assign]
+            lara._use_potion_if_ready()  # noqa: SLF001
+            self.assertEqual(
+                read_leveling_potion_payload(Job.LARA, now=20_100.0)["potionMinutesSinceLastUse"],
+                0,
+            )
+
+    def test_auto_potion_only_triggers_in_attack_zone(self) -> None:
+        with _temporary_local_appdata():
+            device = DryRunDevice()
+            runner = _runner(LevelingMatcher(), device=device)
+            runner._initialize_window()  # noqa: SLF001
+            now = runner._get_timestamp()  # noqa: SLF001
+            runner.vars.update(
+                {
+                    "CurrentJob": runner.vars["JobLynn"],
+                    "map": 101,
+                    "fountainTime": now,
+                    "yanusTime": now,
+                    "patrolTime": now,
+                    "Key7Time": now,
+                }
+            )
+            runner._wall_clock = lambda: 30_000.0  # type: ignore[method-assign]
+            runner._aut_navi = lambda *args, **kwargs: None  # type: ignore[method-assign]
+            runner._wiggle = lambda attack_facing: None  # type: ignore[method-assign]
+            runner._active_character_controller = lambda: _FakeController()  # type: ignore[method-assign]
+            runner._locate_character = lambda: CharacterPosition(0, 90, 0, 0, 0, 0)  # type: ignore[method-assign]
+
+            runner._process_unified_map()  # noqa: SLF001
+
+            pressed_codes = [
+                int(action.args[0])
+                for action in device.actions
+                if action.name == "press_key"
+            ]
+            self.assertNotIn(keycode("p"), pressed_codes)
+
+            device.actions.clear()
+            runner._locate_character = lambda: CharacterPosition(-40, 103, 0, 0, 0, 0)  # type: ignore[method-assign]
+            runner._process_unified_map()  # noqa: SLF001
+            pressed_codes = [
+                int(action.args[0])
+                for action in device.actions
+                if action.name == "press_key"
+            ]
+            self.assertEqual(pressed_codes[:2], [keycode("p"), keycode("2")])
+
 
 class _FakeController:
     def stand_attack(self) -> None:
@@ -208,6 +313,7 @@ def _runner(
     device: DryRunDevice | None = None,
     rune_solver: FakeRuneSolver | None = None,
     request_pause=lambda: None,
+    emit_data=lambda payload: None,
 ) -> LevelingRunner:
     return LevelingRunner(
         config=load_config(load_local=False),
@@ -218,7 +324,28 @@ def _runner(
         window_info=WindowInfo(hwnd=100, title="MapleStory", x=10, y=20, width=800, height=600),
         request_pause=request_pause,
         rune_solver=rune_solver,  # type: ignore[arg-type]
+        emit_data=emit_data,
     )
+
+
+class _temporary_local_appdata:
+    def __init__(self) -> None:
+        self._tempdir: tempfile.TemporaryDirectory[str] | None = None
+        self._old_value: str | None = None
+
+    def __enter__(self) -> Path:
+        self._tempdir = tempfile.TemporaryDirectory()
+        self._old_value = os.environ.get("LOCALAPPDATA")
+        os.environ["LOCALAPPDATA"] = self._tempdir.name
+        return Path(self._tempdir.name)
+
+    def __exit__(self, *args: object) -> None:
+        if self._old_value is None:
+            os.environ.pop("LOCALAPPDATA", None)
+        else:
+            os.environ["LOCALAPPDATA"] = self._old_value
+        if self._tempdir is not None:
+            self._tempdir.cleanup()
 
 
 class FakeRuneSolver:

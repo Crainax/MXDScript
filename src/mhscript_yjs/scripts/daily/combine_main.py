@@ -900,6 +900,15 @@ class DailyRunner:
                     continue
                 at_rune = True
 
+            if not self._prepare_rune_trigger_ui():
+                last_attempt = RunePressAttempt(
+                    status="ui_blocked",
+                    attempt=attempt,
+                    reason="SchedulerUI 未能关闭",
+                )
+                self.sleeper.delay_ms(solver.config.retry_delay_ms)
+                continue
+
             last_attempt = solver.trigger_and_press(self._current_window_info(), attempt=attempt)
             if not last_attempt.pressed:
                 log_important(
@@ -951,6 +960,20 @@ class DailyRunner:
                 self.sleeper.delay_ms(solver.config.retry_delay_ms)
 
         self._pause_for_manual_rune(last_attempt)
+
+    def _prepare_rune_trigger_ui(self) -> bool:
+        if not self._scheduler_panel_visible():
+            return True
+        log_important(
+            self.logger,
+            "[解符文] 检测到 SchedulerUI，先按 [ 关闭后再触发符文",
+        )
+        self._close_scheduler_ui()
+        if self._scheduler_panel_visible():
+            self.logger.warning("[解符文] SchedulerUI 仍然可见，本次不触发 PageDown")
+            return False
+        log_important(self.logger, "[解符文] SchedulerUI 已关闭，继续解符文")
+        return True
 
     def _find_rune_icon(self, name: str) -> MatchResult | None:
         return self._match_optional(

@@ -31,6 +31,8 @@ class GuiApiTests(unittest.TestCase):
             state["settings"]["scriptOptions"]["rune_capture"]["captureIntervalSeconds"],
             5.0,
         )
+        self.assertEqual(state["scriptData"]["leveling"]["potionJob"], "lynn")
+        self.assertIsNone(state["scriptData"]["leveling"]["potionLastUsedAt"])
 
     def test_save_shortcuts_rejects_escape(self) -> None:
         with _temporary_local_appdata():

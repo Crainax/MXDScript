@@ -18,6 +18,10 @@ from mhscript_yjs.runtime.shortcuts import (
     normalize_shortcut_map,
     shortcut_to_win_hotkey,
 )
+from mhscript_yjs.scripts.leveling.leveling import (
+    LEVELING_SCRIPT_ID,
+    read_leveling_potion_payload,
+)
 
 
 class GuiApi:
@@ -44,6 +48,9 @@ class GuiApi:
             },
             "runtime": self.manager.snapshot(),
             "settings": self._load_settings(),
+            "scriptData": {
+                LEVELING_SCRIPT_ID: read_leveling_potion_payload(),
+            },
         }
 
     def poll_events(self) -> dict[str, Any]:

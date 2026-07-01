@@ -41,6 +41,7 @@ export interface AppState {
   };
   runtime: RuntimeState;
   settings: AppSettings;
+  scriptData: Record<string, Record<string, unknown>>;
 }
 
 export interface RuntimeEvent {

@@ -57,7 +57,7 @@ class PositionTracker:
                 return cached
 
         if me is None and recover:
-            self.logger.warning("[Position] 未检测到人物坐标，尝试左右微调后重试")
+            self.logger.info("[Position] 未检测到人物坐标，尝试左右微调后重试")
             self._nudge("Left")
             region = self.minimap_region()
             me, anchor = self._match_position_pair(region)
@@ -80,11 +80,7 @@ class PositionTracker:
                 )
 
         if me is None or anchor is None:
-            self.logger.warning(
-                "[Position] 定位失败 me=%s anchor=%s",
-                "yes" if me else "no",
-                "yes" if anchor else "no",
-            )
+            self._log_locate_failure(recover=recover, use_cache=use_cache, me=me, anchor=anchor)
             if use_cache:
                 self._last_position = None
                 self._cached_misses = 0
@@ -170,6 +166,29 @@ class PositionTracker:
             self.sleeper.delay_random_ms(200, 250)
         finally:
             self.device.key_up(keycode(direction))
+
+    def _log_locate_failure(
+        self,
+        *,
+        recover: bool,
+        use_cache: bool,
+        me: MatchResult | None,
+        anchor: MatchResult | None,
+    ) -> None:
+        me_status = "yes" if me else "no"
+        anchor_status = "yes" if anchor else "no"
+        if not recover and not use_cache:
+            self.logger.info(
+                "[Position] 实时定位本帧未命中 me=%s anchor=%s",
+                me_status,
+                anchor_status,
+            )
+            return
+        self.logger.warning(
+            "[Position] 定位失败 me=%s anchor=%s",
+            me_status,
+            anchor_status,
+        )
 
     def refresh_window(self) -> None:
         if self.window_provider is not None:

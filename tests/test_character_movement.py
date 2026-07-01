@@ -90,6 +90,48 @@ class CharacterMovementTests(unittest.TestCase):
         self.assertEqual(second, _position_at(20, 20, 120, 140, 100, 120))
         self.assertEqual(calls, ["Character.Me"])
 
+    def test_live_poll_miss_logs_info_instead_of_warning(self) -> None:
+        calls: list[str] = []
+
+        def match_image(name, _paths, _region, _threshold):
+            calls.append(name)
+            if name == "Character.Me" and calls.count("Character.Me") == 1:
+                return _match(name, 120, 140)
+            if name == "Character.MapAnchor":
+                return _match(name, 100, 120)
+            return None
+
+        logger_name = "test.character.live_poll_miss"
+        tracker = PositionTracker(
+            window=WindowInfo(hwnd=1, title="MapleStory", x=0, y=0, width=800, height=600),
+            match_image=match_image,
+            device=DryRunDevice(),
+            sleeper=NullSleeper(),
+            logger=logging.getLogger(logger_name),
+        )
+
+        self.assertIsNotNone(tracker.locate())
+        with self.assertLogs(logger_name, level="INFO") as logs:
+            self.assertIsNone(tracker.locate(recover=False, use_cache=False))
+
+        self.assertTrue(any("INFO:" in line and "实时定位本帧未命中" in line for line in logs.output))
+        self.assertFalse(any(line.startswith("WARNING:") for line in logs.output))
+
+    def test_normal_locate_failure_still_logs_warning(self) -> None:
+        logger_name = "test.character.locate_failure"
+        tracker = PositionTracker(
+            window=WindowInfo(hwnd=1, title="MapleStory", x=0, y=0, width=800, height=600),
+            match_image=lambda *_args: None,
+            device=DryRunDevice(),
+            sleeper=NullSleeper(),
+            logger=logging.getLogger(logger_name),
+        )
+
+        with self.assertLogs(logger_name, level="WARNING") as logs:
+            self.assertIsNone(tracker.locate(recover=False, use_cache=True))
+
+        self.assertTrue(any("定位失败 me=no anchor=no" in line for line in logs.output))
+
 
 class _ProbeController(CharacterController):
     def stand_attack(self) -> None:

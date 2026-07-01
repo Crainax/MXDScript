@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import json
 import logging
+import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from mhscript_yjs.characters import MoveTarget
@@ -13,6 +16,7 @@ from mhscript_yjs.drivers.base import InputDevice
 from mhscript_yjs.drivers.dry_run import DryRunDevice
 from mhscript_yjs.drivers.keycodes import keycode
 from mhscript_yjs.drivers.yjs import YjsDevice
+from mhscript_yjs.runtime.app_paths import app_data_dir
 from mhscript_yjs.runtime.control import RunControl, StopRequested
 from mhscript_yjs.runtime.logging import log_important
 from mhscript_yjs.runtime.timing import NullSleeper, Sleeper
@@ -25,6 +29,136 @@ from mhscript_yjs.windows.maple import WindowInfo
 LEVELING_SCRIPT_ID = "leveling"
 LEVELING_SCRIPT_NAME = "练级"
 SUPPORTED_LEVELING_MAPS = {101, 111, 121, 122, 132, 161, -232}
+POTION_INTERVAL_SECONDS = 30 * 60
+POTION_INTERVAL_MINUTES = POTION_INTERVAL_SECONDS // 60
+POTION_CONFIRM_IMAGES = (
+    r"UI\OK.bmp",
+    r"UI\OK2.bmp",
+)
+
+
+def _noop_emit_data(payload: Mapping[str, Any]) -> None:
+    return None
+
+
+def leveling_potion_state_path() -> Path:
+    return app_data_dir() / "leveling_potion_state.json"
+
+
+def read_leveling_potion_payload(
+    job: Job | str | None = None,
+    *,
+    now: float | None = None,
+) -> dict[str, Any]:
+    current_job = _normalize_potion_job(job)
+    state = _load_leveling_potion_state()
+    if current_job is None:
+        current_job = _normalize_potion_job(state.get("lastJob")) or Job.LYNN.value
+    return _leveling_potion_payload_from_state(state, current_job, now=now)
+
+
+def _load_leveling_potion_state() -> dict[str, Any]:
+    path = leveling_potion_state_path()
+    try:
+        raw_state = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"lastJob": Job.LYNN.value, "jobs": {}}
+
+    if not isinstance(raw_state, dict):
+        return {"lastJob": Job.LYNN.value, "jobs": {}}
+
+    jobs: dict[str, dict[str, float]] = {}
+    raw_jobs = raw_state.get("jobs")
+    if isinstance(raw_jobs, dict):
+        for raw_job, raw_entry in raw_jobs.items():
+            job = _normalize_potion_job(raw_job)
+            if job is None:
+                continue
+            timestamp = _coerce_potion_timestamp(
+                raw_entry.get("lastUsedAt") if isinstance(raw_entry, dict) else raw_entry
+            )
+            if timestamp is not None:
+                jobs[job] = {"lastUsedAt": timestamp}
+
+    last_job = _normalize_potion_job(raw_state.get("lastJob")) or Job.LYNN.value
+    return {"lastJob": last_job, "jobs": jobs}
+
+
+def _write_leveling_potion_state(state: Mapping[str, Any]) -> None:
+    path = leveling_potion_state_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(dict(state), ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _normalize_potion_job(job: Any) -> str | None:
+    if isinstance(job, Job):
+        return job.value
+    if isinstance(job, str):
+        normalized = job.strip().lower()
+        if normalized in {candidate.value for candidate in Job}:
+            return normalized
+    return None
+
+
+def _coerce_potion_timestamp(value: Any) -> float | None:
+    try:
+        timestamp = float(value)
+    except (TypeError, ValueError):
+        return None
+    if timestamp <= 0:
+        return None
+    return timestamp
+
+
+def _potion_last_used_at(state: Mapping[str, Any], job: str) -> float | None:
+    jobs = state.get("jobs")
+    if not isinstance(jobs, dict):
+        return None
+    entry = jobs.get(job)
+    if isinstance(entry, dict):
+        return _coerce_potion_timestamp(entry.get("lastUsedAt"))
+    return _coerce_potion_timestamp(entry)
+
+
+def _record_leveling_potion_use(
+    state: Mapping[str, Any],
+    job: str,
+    used_at: float,
+) -> dict[str, Any]:
+    jobs = dict(state.get("jobs")) if isinstance(state.get("jobs"), dict) else {}
+    jobs[job] = {"lastUsedAt": float(used_at)}
+    next_state = {"lastJob": job, "jobs": jobs}
+    _write_leveling_potion_state(next_state)
+    return next_state
+
+
+def _remember_leveling_potion_job(state: Mapping[str, Any], job: str) -> dict[str, Any]:
+    jobs = dict(state.get("jobs")) if isinstance(state.get("jobs"), dict) else {}
+    next_state = {"lastJob": job, "jobs": jobs}
+    _write_leveling_potion_state(next_state)
+    return next_state
+
+
+def _leveling_potion_payload_from_state(
+    state: Mapping[str, Any],
+    job: str,
+    *,
+    now: float | None = None,
+) -> dict[str, Any]:
+    last_used_at = _potion_last_used_at(state, job)
+    if now is None:
+        now = time.time()
+    minutes_since_last_use = (
+        None
+        if last_used_at is None
+        else max(0, int((float(now) - last_used_at) // 60))
+    )
+    return {
+        "potionJob": job,
+        "potionLastUsedAt": last_used_at,
+        "potionMinutesSinceLastUse": minutes_since_last_use,
+        "potionIntervalMinutes": POTION_INTERVAL_MINUTES,
+    }
 
 
 @dataclass(frozen=True)
@@ -65,6 +199,7 @@ class LevelingRunner(DailyRunner):
         capture: MssScreenCapture | None = None,
         request_pause: Callable[[], None] | None = None,
         rune_solver: RuneSolver | None = None,
+        emit_data: Callable[[Mapping[str, Any]], None] | None = None,
     ) -> None:
         super().__init__(
             config=config,
@@ -80,6 +215,9 @@ class LevelingRunner(DailyRunner):
             rune_solver=rune_solver,
         )
         self.actions = CharacterActions(device, sleeper, logger)
+        self.emit_data = emit_data or _noop_emit_data
+        self._potion_state = _load_leveling_potion_state()
+        self._last_potion_status_emit_at = 0.0
 
     def run(self) -> LevelingScriptResult:
         try:
@@ -114,6 +252,8 @@ class LevelingRunner(DailyRunner):
                 "map": 0,
             }
         )
+        self._remember_current_potion_job()
+        self._emit_potion_status(force=True)
 
     def _run_leveling_loop(self) -> None:
         while True:
@@ -177,18 +317,18 @@ class LevelingRunner(DailyRunner):
 
         position = self._locate_character()
         if position is None:
+            self._emit_potion_status_if_needed()
             self.sleeper.delay_ms(200)
             return
 
-        if (
-            position.y != map_config.attack_y
-            or position.x < map_config.attack_x - 4
-            or position.x > map_config.attack_x + 4
-        ):
+        in_attack_zone = self._is_in_attack_zone(position, map_config)
+        if not in_attack_zone:
             log_important(self.logger, "回到攻击点")
             self._aut_navi(map_config.attack_x, map_config.attack_y, tolerance=4, y_tolerance=0)
             self._wiggle(map_config.attack_facing)
             self.vars["patrolTime"] = self._get_timestamp()
+        else:
+            self._use_potion_if_ready()
 
         if self._get_timestamp() - float(self.vars.get("patrolTime", 0)) > 9:
             log_important(self.logger, "左右晃防呆")
@@ -205,7 +345,85 @@ class LevelingRunner(DailyRunner):
         controller = self._active_character_controller()
         if controller is not None:
             controller.stand_attack()
+        self._emit_potion_status_if_needed()
         self.sleeper.delay_random_ms(632, 640)
+
+    def _is_in_attack_zone(
+        self,
+        position: Any,
+        map_config: LevelingMapConfig,
+    ) -> bool:
+        return (
+            position.y == map_config.attack_y
+            and map_config.attack_x - 4 <= position.x <= map_config.attack_x + 4
+        )
+
+    def _use_potion_if_ready(self) -> None:
+        job = self._current_potion_job()
+        if job is None:
+            return
+
+        now = self._wall_clock()
+        last_used_at = _potion_last_used_at(self._potion_state, job)
+        if last_used_at is not None and now - last_used_at < POTION_INTERVAL_SECONDS:
+            self._emit_potion_status_if_needed()
+            return
+
+        log_important(self.logger, "[Leveling] %s 自动吃药", job)
+        self.device.press_key(keycode("p"), 1)
+        self.sleeper.delay_ms(1000)
+        self.device.press_key(keycode("2"), 1)
+        self.sleeper.delay_ms(200)
+        self._confirm_potion_dialog_if_present()
+
+        self._potion_state = _record_leveling_potion_use(
+            self._potion_state,
+            job,
+            self._wall_clock(),
+        )
+        self._emit_potion_status(force=True)
+
+    def _confirm_potion_dialog_if_present(self) -> None:
+        for _ in range(2):
+            match = self._match_optional(
+                "Leveling.PotionDialog",
+                POTION_CONFIRM_IMAGES,
+                self._region("x1", "y1", "xEnd", "yEnd"),
+            )
+            if match is None:
+                return
+            log_important(self.logger, "[Leveling] 自动吃药确认弹窗：%s", match.image_path)
+            self.device.press_key(keycode("enter"), 1)
+            self.sleeper.delay_ms(200)
+
+    def _current_potion_job(self) -> str | None:
+        return _normalize_potion_job(self._active_job())
+
+    def _remember_current_potion_job(self) -> None:
+        job = self._current_potion_job()
+        if job is None:
+            return
+        self._potion_state = _remember_leveling_potion_job(self._potion_state, job)
+
+    def _emit_potion_status_if_needed(self) -> None:
+        now = self._wall_clock()
+        if now - self._last_potion_status_emit_at < 5:
+            return
+        self._emit_potion_status(now=now)
+
+    def _emit_potion_status(self, *, force: bool = False, now: float | None = None) -> None:
+        job = self._current_potion_job()
+        if job is None:
+            return
+        if now is None:
+            now = self._wall_clock()
+        if not force and now - self._last_potion_status_emit_at < 5:
+            return
+        self.emit_data(_leveling_potion_payload_from_state(self._potion_state, job, now=now))
+        self._last_potion_status_emit_at = now
+
+    def _wall_clock(self) -> float:
+        return time.time()
 
     def _place_fountain(self, map_config: LevelingMapConfig) -> None:
         log_important(self.logger, "前往放喷泉")
@@ -397,6 +615,9 @@ class LevelingRunner(DailyRunner):
     def _release_rune_if_ready(self) -> None:
         self._release_rune_with_solver()
 
+    def _prepare_rune_trigger_ui(self) -> bool:
+        return True
+
     def _move_to_rune_verify_position(self) -> bool:
         try:
             map_config = self._get_map_config()
@@ -501,6 +722,7 @@ def create_runner(
     control: RunControl,
     options: Mapping[str, Any] | None = None,
     request_pause: Callable[[], None] | None = None,
+    emit_data: Callable[[Mapping[str, Any]], None] | None = None,
 ) -> LevelingRunner:
     device: InputDevice = (
         DryRunDevice(logger=logger) if dry_run else YjsDevice(settings=config.yjs, logger=logger)
@@ -525,4 +747,5 @@ def create_runner(
         control=control,
         capture=capture,
         request_pause=request_pause,
+        emit_data=emit_data,
     )

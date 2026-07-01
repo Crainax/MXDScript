@@ -6,6 +6,7 @@ interface ApiResponse {
   app?: AppState["app"];
   runtime?: RuntimeState;
   settings?: AppSettings;
+  scriptData?: Record<string, Record<string, unknown>>;
   events?: RuntimeEvent[];
   path?: string;
 }
@@ -21,6 +22,7 @@ export async function getState(): Promise<AppState> {
     app: response.app,
     runtime: normalizeRuntime(response.runtime),
     settings: response.settings,
+    scriptData: response.scriptData ?? {},
   };
 }
 

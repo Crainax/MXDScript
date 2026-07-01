@@ -10,8 +10,10 @@ __pycache__/
 .tmp_appdata/
 
 # Runtime output
+*.log
 logs/*
 !logs/.gitkeep
+auto_screenshots/
 work/
 outputs/
 screenshots/

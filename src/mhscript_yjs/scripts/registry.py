@@ -263,6 +263,7 @@ def _run_leveling_script(context: ScriptRunContext) -> ScriptRunResult:
         control=context.control,
         options=dict(context.script_options),
         request_pause=context.request_pause,
+        emit_data=context.emit_data,
     )
     result = runner.run()
     return ScriptRunResult(

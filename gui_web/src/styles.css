@@ -402,6 +402,17 @@ h2 {
   accent-color: var(--primary-strong);
 }
 
+.leveling-potion-label {
+  margin-top: 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--button);
+  padding: 10px 12px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 700;
+}
+
 .debug-field {
   display: grid;
   gap: 8px;

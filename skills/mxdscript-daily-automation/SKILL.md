@@ -52,6 +52,7 @@ Coordinates should refresh the MapleStory client window each round. Coordinate s
 - Keep `ReleaseRune` shared. `combine_main` and `leveling` should call the same Python rune release flow instead of letting one script fall back to the legacy KM `Pause`.
 - Press `PageDown`, wait for the rune UI, recognize all four directions, freeze the four-key sequence, then press. Do not re-recognize after the first direction key because the first arrow may disappear.
 - Reject unsafe recognition before pressing any direction key. Use both the group score and per-slot confidence; on rejection, save a screenshot under `auto_screenshots/rune_solver`, press `Space` twice to exit the UI, wait about 3 seconds, and retry.
+- In `combine_main`, close SchedulerUI with `[` before pressing `PageDown` for a rune. AUT completion checks can leave SchedulerUI open, and then the rune UI will not appear even though the character is standing on the rune.
 - Only set `RuneCooldown` after leaving the rune position and confirming `Rune.bmp` is gone for multiple frames. If verification itself fails, pause for manual handling rather than assuming success.
 - Rune logs should be human-readable Chinese at `IMPORTANT` or higher for key decisions: target conversion, frozen directions, unsafe recognition screenshot, retry, success, and manual pause.
 

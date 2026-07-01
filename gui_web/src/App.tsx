@@ -50,6 +50,7 @@ import type {
 } from "./types";
 
 const MAX_LOG_LINES = 800;
+const LEVELING_SCRIPT_ID = "leveling";
 const DAILY_SCRIPT_ID = "daily_script";
 const IMAGE_RECOGNITION_SCRIPT_ID = "image_recognition";
 const COORDINATE_DETECTOR_SCRIPT_ID = "coordinate_detector";
@@ -88,6 +89,7 @@ export function App() {
       .then((state) => {
         setAppState(state);
         setSelectedScriptId(state.runtime.scripts[0]?.id ?? null);
+        setScriptData(state.scriptData);
         const storedTheme = readStoredTheme(state.settings.theme);
         setThemePreference(storedTheme);
         setDryRun(readStoredBoolean("mxdscript.dryRun", state.settings.dryRun));
@@ -231,7 +233,10 @@ export function App() {
           const nextRuntime = await startScript(scriptId, { dryRun, skipDelays });
           applyRuntime(nextRuntime);
           setSelectedScriptId(scriptId);
-          setScriptData((current) => ({ ...current, [scriptId]: {} }));
+          setScriptData((current) => ({
+            ...current,
+            [scriptId]: scriptId === LEVELING_SCRIPT_ID ? (current[scriptId] ?? {}) : {},
+          }));
           setMessage(null);
       } catch (error) {
         setMessage(error instanceof Error ? error.message : "启动脚本失败");
@@ -416,6 +421,9 @@ export function App() {
             ) : null}
             {selectedScript?.id === DAILY_SCRIPT_ID ? (
               <DailyOptionsPanel options={selectedScriptOptions} onChange={updateSelectedScriptOption} />
+            ) : null}
+            {selectedScript?.id === LEVELING_SCRIPT_ID ? (
+              <LevelingOptionsPanel data={scriptData[selectedScript.id]} />
             ) : null}
             {selectedScript?.id === IMAGE_RECOGNITION_SCRIPT_ID ? (
               <ImageRecognitionOptionsPanel
@@ -630,6 +638,33 @@ function DailyOptionsPanel(props: {
           </Fragment>
         ))}
       </div>
+    </section>
+  );
+}
+
+function LevelingOptionsPanel(props: { data?: Record<string, unknown> }) {
+  const [nowMs, setNowMs] = useState(() => Date.now());
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNowMs(Date.now()), 15000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const job = payloadString(props.data, "potionJob", "lynn");
+  const lastUsedAt = payloadNumber(props.data, "potionLastUsedAt");
+  const payloadMinutes = payloadNumber(props.data, "potionMinutesSinceLastUse");
+  const minutes =
+    lastUsedAt === null ? payloadMinutes : Math.max(0, Math.floor((nowMs / 1000 - lastUsedAt) / 60));
+
+  return (
+    <section className="debug-options-panel">
+      <div className="panel-header">
+        <div>
+          <div className="category-label">脚本配置</div>
+          <h2>练级循环</h2>
+        </div>
+      </div>
+      <div className="leveling-potion-label">{job}:上次吃药{formatPotionMinutes(minutes)}分钟前</div>
     </section>
   );
 }
@@ -1422,6 +1457,10 @@ function formatMoveStatus(status: Record<string, unknown>): string {
 
 function formatMaybeNumber(value: number | null): string {
   return value === null ? "-" : String(value);
+}
+
+function formatPotionMinutes(value: number | null): string {
+  return value === null ? "--" : String(value);
 }
 
 function formatScore(value: number | null): string {

@@ -9,6 +9,7 @@ from mhscript_yjs.core.config import load_config
 from mhscript_yjs.drivers.dry_run import DryRunDevice
 from mhscript_yjs.runtime.timing import NullSleeper
 from mhscript_yjs.scripts.daily.combine_main import DailyRunner
+from mhscript_yjs.scripts.tool.rune_solver import RunePressAttempt, RuneSolverConfig
 from mhscript_yjs.vision.types import ImageGroup, MatchResult, Region
 from mhscript_yjs.windows.maple import WindowInfo
 
@@ -126,6 +127,23 @@ class LynnSkillMatcher:
         )
 
 
+class FakeRuneSolver:
+    def __init__(self, events: list[str], *, max_attempts: int = 1) -> None:
+        self.events = events
+        self.config = RuneSolverConfig(max_attempts=max_attempts, retry_delay_ms=0)
+        self.attempts: list[int] = []
+
+    def trigger_and_press(self, window: WindowInfo, *, attempt: int) -> RunePressAttempt:
+        self.events.append("trigger")
+        self.attempts.append(attempt)
+        return RunePressAttempt(
+            status="pressed",
+            attempt=attempt,
+            reason="ok",
+            directions=("up", "down", "left", "right"),
+        )
+
+
 class DailyScriptTests(unittest.TestCase):
     def test_release_rune_sub_uses_python_solver_instead_of_legacy_pause(self) -> None:
         runner = DailyRunner(
@@ -141,6 +159,47 @@ class DailyScriptTests(unittest.TestCase):
         runner.execute_sub("ReleaseRune")
 
         self.assertEqual(calls, ["solver"])
+
+    def test_solve_rune_closes_scheduler_ui_before_page_down(self) -> None:
+        events: list[str] = []
+        runner = DailyRunner(
+            config=load_config(load_local=False),
+            device=DryRunDevice(),
+            matcher=FakeMatcher(),  # type: ignore[arg-type]
+            sleeper=NullSleeper(),
+            logger=logging.getLogger("test.daily_script"),
+            window_info=WindowInfo(hwnd=100, title="MapleStory", x=10, y=20, width=800, height=600),
+            rune_solver=FakeRuneSolver(events),  # type: ignore[arg-type]
+        )
+        visible_checks = [True, False]
+        runner._move_to_rune_icon = lambda rune: events.append("move") or True  # type: ignore[method-assign]
+        runner._scheduler_panel_visible = lambda: visible_checks.pop(0)  # type: ignore[method-assign]
+        runner._close_scheduler_ui = lambda: events.append("close")  # type: ignore[method-assign]
+        runner._leave_rune_and_find_remaining = lambda: (True, None)  # type: ignore[method-assign]
+
+        runner._solve_rune(_rune_match())  # noqa: SLF001
+
+        self.assertEqual(events, ["move", "close", "trigger"])
+
+    def test_solve_rune_does_not_press_page_down_when_scheduler_ui_stays_open(self) -> None:
+        events: list[str] = []
+        runner = DailyRunner(
+            config=load_config(load_local=False),
+            device=DryRunDevice(),
+            matcher=FakeMatcher(),  # type: ignore[arg-type]
+            sleeper=NullSleeper(),
+            logger=logging.getLogger("test.daily_script"),
+            window_info=WindowInfo(hwnd=100, title="MapleStory", x=10, y=20, width=800, height=600),
+            rune_solver=FakeRuneSolver(events),  # type: ignore[arg-type]
+        )
+        runner._move_to_rune_icon = lambda rune: events.append("move") or True  # type: ignore[method-assign]
+        runner._scheduler_panel_visible = lambda: True  # type: ignore[method-assign]
+        runner._close_scheduler_ui = lambda: events.append("close")  # type: ignore[method-assign]
+        runner._pause_for_manual_rune = lambda last_attempt: events.append("pause")  # type: ignore[method-assign]
+
+        runner._solve_rune(_rune_match())  # noqa: SLF001
+
+        self.assertEqual(events, ["move", "close", "pause"])
 
     def test_initializes_job_even_when_all_modules_are_disabled(self) -> None:
         device = DryRunDevice()
@@ -747,6 +806,18 @@ class DailyScriptTests(unittest.TestCase):
                 ("key_up", (ord("4"),)),
             ],
         )
+
+
+def _rune_match() -> MatchResult:
+    return MatchResult(
+        group="Rune",
+        image_path=Path("Rune.bmp"),
+        x=100,
+        y=200,
+        width=20,
+        height=10,
+        score=1.0,
+    )
 
 
 if __name__ == "__main__":

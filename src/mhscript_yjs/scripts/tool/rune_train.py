@@ -4,7 +4,8 @@ import argparse
 import csv
 import json
 import os
-from dataclasses import asdict, dataclass
+from collections import defaultdict
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,17 @@ DIRECTION_LABELS = {
     "右": "right",
 }
 DIRECTION_NAMES = ("up", "down", "left", "right")
+DIRECTION_ALIASES = {
+    **DIRECTION_LABELS,
+    "up": "up",
+    "down": "down",
+    "left": "left",
+    "right": "right",
+    "u": "up",
+    "d": "down",
+    "l": "left",
+    "r": "right",
+}
 DIRECTION_KEYS = {
     "up": "U",
     "down": "D",
@@ -25,6 +37,7 @@ DIRECTION_KEYS = {
     "right": "R",
     "unknown": "?",
 }
+REVIEW_TRAINING_STATUSES = {"ok", "hard"}
 SLOT_FRACTIONS = (0.14, 0.39, 0.62, 0.86)
 MODEL_VARIANTS = ((132, 36), (132, 40), (152, 36), (152, 40), (112, 36))
 DEFAULT_UNKNOWN_THRESHOLD = 1.03
@@ -74,6 +87,26 @@ class FoldReport:
 
 
 @dataclass(frozen=True)
+class ReviewSummary:
+    review_results: str
+    original_crop_count: int
+    reviewed_crop_count: int
+    ok_count: int
+    hard_count: int
+    bad_count: int
+    pending_count: int
+    label_correction_count: int
+    clean_training_sample_count: int
+    clean_image_count: int
+    bad_with_direction_count: int
+    bad_without_direction_count: int
+    missing_review_count: int
+    extra_review_count: int
+    images_with_bad_count: int
+    clean_direction_counts: dict[str, int]
+
+
+@dataclass(frozen=True)
 class TrainingReport:
     positive_dir: str
     negative_dir: str | None
@@ -91,6 +124,7 @@ class TrainingReport:
     folds: list[FoldReport]
     positive_results: list[ImagePrediction]
     negative_results: list[ImagePrediction]
+    review_summary: ReviewSummary | None = None
 
 
 @dataclass(frozen=True)
@@ -110,6 +144,20 @@ class _ImageRecord:
     expected: tuple[str, str, str, str]
     expected_indices: tuple[int, int, int, int]
     panel: PanelCandidate
+
+
+@dataclass(frozen=True)
+class _ReviewItem:
+    id: str
+    source_image: str
+    slot: int
+    expected: str
+    corrected_expected: str | None
+    label: str | None
+    crop_path: str
+    review: str
+    notes: str
+    bad_has_direction: bool
 
 
 class RuneTemplateModel:
@@ -186,20 +234,131 @@ def parse_expected_sequence(path: Path) -> tuple[str, str, str, str] | None:
     return tuple(directions)  # type: ignore[return-value]
 
 
+def _load_review_results(path: Path) -> list[_ReviewItem]:
+    items: list[_ReviewItem] = []
+    with path.open("r", newline="", encoding="utf-8-sig") as file:
+        reader = csv.DictReader(file)
+        required = {
+            "id",
+            "source_image",
+            "slot",
+            "expected",
+            "corrected_expected",
+            "crop_path",
+            "review",
+            "notes",
+        }
+        missing = sorted(required - set(reader.fieldnames or ()))
+        if missing:
+            raise ValueError(f"Review results missing required columns: {', '.join(missing)}")
+        for row in reader:
+            source_image = (row.get("source_image") or "").strip()
+            slot_text = (row.get("slot") or "").strip()
+            if not source_image or not slot_text:
+                raise ValueError(f"Review row has empty source_image or slot: {row}")
+            slot = int(slot_text) - 1
+            if slot not in range(4):
+                raise ValueError(f"Review row slot must be 1-4: {row}")
+            expected = _normalize_direction(row.get("expected") or "")
+            if expected is None:
+                raise ValueError(f"Review row has unknown expected direction: {row}")
+            corrected_expected = _normalize_direction(row.get("corrected_expected") or "")
+            review = _normalize_review(row.get("review") or "")
+            label = corrected_expected or expected
+            if review not in REVIEW_TRAINING_STATUSES:
+                label = None
+            notes = (row.get("notes") or "").strip()
+            items.append(
+                _ReviewItem(
+                    id=(row.get("id") or "").strip(),
+                    source_image=source_image,
+                    slot=slot,
+                    expected=expected,
+                    corrected_expected=corrected_expected,
+                    label=label,
+                    crop_path=(row.get("crop_path") or "").strip(),
+                    review=review,
+                    notes=notes,
+                    bad_has_direction=_bad_note_has_direction(notes),
+                )
+            )
+    return items
+
+
+def _normalize_direction(value: str) -> str | None:
+    text = value.strip()
+    if not text:
+        return None
+    return DIRECTION_ALIASES.get(text) or DIRECTION_ALIASES.get(text.lower())
+
+
+def _normalize_review(value: str) -> str:
+    review = value.strip().lower()
+    if not review:
+        return "pending"
+    if review not in {"ok", "bad", "hard", "pending"}:
+        raise ValueError(f"Unknown crop review value: {value}")
+    return review
+
+
+def _bad_note_has_direction(notes: str) -> bool:
+    normalized = notes.strip().lower()
+    if not normalized:
+        return False
+    return "无" not in normalized and "empty" not in normalized and "none" not in normalized
+
+
 def run_training(
     positive_dir: Path,
     output_dir: Path,
     negative_dir: Path | None = None,
     folds: int = 5,
+    review_results: Path | None = None,
 ) -> TrainingReport:
     positive_dir = positive_dir.resolve()
     output_dir = output_dir.resolve()
     negative_dir = negative_dir.resolve() if negative_dir is not None else None
+    review_results = review_results.resolve() if review_results is not None else None
     output_dir.mkdir(parents=True, exist_ok=True)
 
     image_records = _load_positive_records(positive_dir)
+    review_items: list[_ReviewItem] = []
+    review_slot_keys: set[tuple[str, int]] | None = None
+    review_summary: ReviewSummary | None = None
+    if review_results is not None:
+        review_items = _load_review_results(review_results)
+        review_by_slot = {
+            (item.source_image, item.slot): item
+            for item in review_items
+        }
+        image_records = _apply_review_labels_to_image_records(image_records, review_by_slot)
+    else:
+        review_by_slot = None
+
     slot_records = _build_slot_records(image_records)
-    fold_reports, cv_results, confusion = _cross_validate(image_records, slot_records, folds)
+    original_crop_count = len(slot_records)
+    if review_by_slot is not None:
+        slot_records, review_slot_keys = _apply_review_results_to_slot_records(
+            slot_records,
+            review_by_slot,
+        )
+        if not slot_records:
+            raise ValueError("No training samples remain after applying review results.")
+        review_summary = _summarize_review_results(
+            review_results=review_results,
+            image_records=image_records,
+            all_slot_records_count=original_crop_count,
+            clean_slot_records=slot_records,
+            review_items=review_items,
+            clean_slot_keys=review_slot_keys,
+        )
+
+    fold_reports, cv_results, confusion = _cross_validate(
+        image_records,
+        slot_records,
+        folds,
+        metric_slot_keys=review_slot_keys,
+    )
 
     final_model = RuneTemplateModel.train(slot_records)
     final_positive_results = [
@@ -227,13 +386,12 @@ def run_training(
     final_model.save(output_dir / "model" / "rune_template_model.npz", threshold)
     _write_crops_and_contact_sheets(image_records, final_model, output_dir)
     _write_debug_images(final_positive_results, negative_results, output_dir)
+    if review_summary is not None and review_results is not None:
+        _write_review_analysis_files(review_items, image_records, review_results.parent, output_dir)
 
     cv_arrow_accuracy = _mean([report.arrow_accuracy for report in fold_reports])
     cv_sequence_accuracy = _mean([report.sequence_accuracy for report in fold_reports])
-    final_sequence_accuracy = _ratio(
-        sum(1 for result in final_positive_results if result.sequence_correct),
-        len(final_positive_results),
-    )
+    final_sequence_accuracy = _sequence_accuracy(final_positive_results, review_slot_keys)
     final_accept_rate = _ratio(
         sum(1 for result in final_positive_results if result.accepted),
         len(final_positive_results),
@@ -261,6 +419,7 @@ def run_training(
         folds=fold_reports,
         positive_results=cv_results,
         negative_results=negative_results,
+        review_summary=review_summary,
     )
     _write_report_files(report, output_dir)
     return report
@@ -293,6 +452,122 @@ def locate_panel(image: np.ndarray) -> PanelCandidate:
     if best is None:
         return PanelCandidate(score=0.0, x=0, y=0, width=0, height=0)
     return best
+
+
+def _apply_review_labels_to_image_records(
+    image_records: list[_ImageRecord],
+    review_by_slot: dict[tuple[str, int], _ReviewItem],
+) -> list[_ImageRecord]:
+    reviewed_records: list[_ImageRecord] = []
+    for record in image_records:
+        expected = list(record.expected)
+        for slot in range(4):
+            review = review_by_slot.get((record.path.name, slot))
+            if review is not None and review.label is not None:
+                expected[slot] = review.label
+        expected_tuple = tuple(expected)  # type: ignore[assignment]
+        expected_indices = tuple(
+            DIRECTION_NAMES.index(item)
+            for item in expected_tuple
+        )
+        reviewed_records.append(
+            replace(
+                record,
+                expected=expected_tuple,
+                expected_indices=expected_indices,  # type: ignore[arg-type]
+            )
+        )
+    return reviewed_records
+
+
+def _apply_review_results_to_slot_records(
+    slot_records: list[_SlotRecord],
+    review_by_slot: dict[tuple[str, int], _ReviewItem],
+) -> tuple[list[_SlotRecord], set[tuple[str, int]]]:
+    clean_records: list[_SlotRecord] = []
+    clean_slot_keys: set[tuple[str, int]] = set()
+    for record in slot_records:
+        key = (record.image_path.name, record.slot)
+        review = review_by_slot.get(key)
+        if review is None or review.label is None:
+            continue
+        clean_records.append(
+            replace(
+                record,
+                expected_index=DIRECTION_NAMES.index(review.label),
+            )
+        )
+        clean_slot_keys.add(key)
+    return clean_records, clean_slot_keys
+
+
+def _summarize_review_results(
+    review_results: Path,
+    image_records: list[_ImageRecord],
+    all_slot_records_count: int,
+    clean_slot_records: list[_SlotRecord],
+    review_items: list[_ReviewItem],
+    clean_slot_keys: set[tuple[str, int]],
+) -> ReviewSummary:
+    review_counts = {
+        status: sum(1 for item in review_items if item.review == status)
+        for status in ("ok", "hard", "bad", "pending")
+    }
+    review_keys = {(item.source_image, item.slot) for item in review_items}
+    expected_keys = {
+        (record.path.name, slot)
+        for record in image_records
+        for slot in range(4)
+    }
+    images_with_bad = {
+        item.source_image
+        for item in review_items
+        if item.review == "bad"
+    }
+    clean_images = sum(
+        1
+        for record in image_records
+        if all((record.path.name, slot) in clean_slot_keys for slot in range(4))
+    )
+    direction_counts = {
+        direction: sum(
+            1
+            for record in clean_slot_records
+            if DIRECTION_NAMES[record.expected_index] == direction
+        )
+        for direction in DIRECTION_NAMES
+    }
+    return ReviewSummary(
+        review_results=str(review_results),
+        original_crop_count=all_slot_records_count,
+        reviewed_crop_count=len(review_items),
+        ok_count=review_counts["ok"],
+        hard_count=review_counts["hard"],
+        bad_count=review_counts["bad"],
+        pending_count=review_counts["pending"],
+        label_correction_count=sum(
+            1
+            for item in review_items
+            if item.corrected_expected is not None
+            and item.corrected_expected != item.expected
+        ),
+        clean_training_sample_count=len(clean_slot_records),
+        clean_image_count=clean_images,
+        bad_with_direction_count=sum(
+            1
+            for item in review_items
+            if item.review == "bad" and item.bad_has_direction
+        ),
+        bad_without_direction_count=sum(
+            1
+            for item in review_items
+            if item.review == "bad" and not item.bad_has_direction
+        ),
+        missing_review_count=len(expected_keys - review_keys),
+        extra_review_count=len(review_keys - expected_keys),
+        images_with_bad_count=len(images_with_bad),
+        clean_direction_counts=direction_counts,
+    )
 
 
 def _load_positive_records(positive_dir: Path) -> list[_ImageRecord]:
@@ -380,6 +655,7 @@ def _cross_validate(
     image_records: list[_ImageRecord],
     slot_records: list[_SlotRecord],
     folds: int,
+    metric_slot_keys: set[tuple[str, int]] | None = None,
 ) -> tuple[list[FoldReport], list[ImagePrediction], dict[str, dict[str, int]]]:
     folds = max(2, min(folds, len(image_records)))
     fold_reports: list[FoldReport] = []
@@ -411,24 +687,54 @@ def _cross_validate(
         correct_slots = 0
         for result in fold_results:
             for slot in result.slots:
+                if metric_slot_keys is not None and (
+                    Path(result.image).name,
+                    slot.slot,
+                ) not in metric_slot_keys:
+                    continue
                 if slot.expected is not None:
                     total_slots += 1
                     correct_slots += int(bool(slot.correct))
                     confusion[slot.expected][slot.predicted] += 1
+        sequence_results = _sequence_metric_results(fold_results, metric_slot_keys)
         fold_reports.append(
             FoldReport(
                 fold=fold,
                 image_count=len(fold_results),
                 arrow_accuracy=_ratio(correct_slots, total_slots),
                 sequence_accuracy=_ratio(
-                    sum(1 for result in fold_results if result.sequence_correct),
-                    len(fold_results),
+                    sum(1 for result in sequence_results if result.sequence_correct),
+                    len(sequence_results),
                 ),
             )
         )
 
     image_results.sort(key=lambda result: result.image)
     return fold_reports, image_results, confusion
+
+
+def _sequence_accuracy(
+    results: list[ImagePrediction],
+    metric_slot_keys: set[tuple[str, int]] | None,
+) -> float:
+    sequence_results = _sequence_metric_results(results, metric_slot_keys)
+    return _ratio(
+        sum(1 for result in sequence_results if result.sequence_correct),
+        len(sequence_results),
+    )
+
+
+def _sequence_metric_results(
+    results: list[ImagePrediction],
+    metric_slot_keys: set[tuple[str, int]] | None,
+) -> list[ImagePrediction]:
+    if metric_slot_keys is None:
+        return results
+    return [
+        result
+        for result in results
+        if all((Path(result.image).name, slot) in metric_slot_keys for slot in range(4))
+    ]
 
 
 def _predict_positive_image(
@@ -789,6 +1095,145 @@ def _write_debug_images(
             columns=4,
             cell_size=240,
         )
+
+
+def _write_review_analysis_files(
+    review_items: list[_ReviewItem],
+    image_records: list[_ImageRecord],
+    review_dir: Path,
+    output_dir: Path,
+) -> None:
+    output_review_dir = output_dir / "review"
+    output_review_dir.mkdir(parents=True, exist_ok=True)
+    image_by_name = {record.path.name: record for record in image_records}
+    bad_items = [item for item in review_items if item.review == "bad"]
+    _write_bad_crops_contact_sheet(bad_items, review_dir, output_review_dir)
+    _write_bad_by_source_csv(bad_items, review_items, output_review_dir / "bad_by_source_image.csv")
+    _write_crop_locator_failures_csv(
+        bad_items,
+        image_by_name,
+        output_review_dir / "crop_locator_failures.csv",
+    )
+
+
+def _write_bad_crops_contact_sheet(
+    bad_items: list[_ReviewItem],
+    review_dir: Path,
+    output_review_dir: Path,
+) -> None:
+    tiles: list[tuple[np.ndarray, str, str, bool]] = []
+    for item in bad_items:
+        crop_path = _resolve_review_crop_path(review_dir, item.crop_path)
+        if not crop_path.exists():
+            continue
+        crop = _read_image(crop_path)
+        label = f"{Path(item.source_image).stem}_s{item.slot + 1}"
+        tiles.append((crop, item.source_image, label, False))
+    if tiles:
+        _write_contact_sheet(
+            tiles,
+            output_review_dir / "bad_crops_contact_sheet.png",
+            columns=10,
+            cell_size=96,
+        )
+
+
+def _write_bad_by_source_csv(
+    bad_items: list[_ReviewItem],
+    review_items: list[_ReviewItem],
+    path: Path,
+) -> None:
+    source_counts: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    source_notes: dict[str, set[str]] = defaultdict(set)
+    bad_slots: dict[str, list[str]] = defaultdict(list)
+    for item in review_items:
+        source_counts[item.source_image][item.review] += 1
+        if item.notes:
+            source_notes[item.source_image].add(item.notes)
+    for item in bad_items:
+        bad_slots[item.source_image].append(str(item.slot + 1))
+        source_counts[item.source_image][
+            "bad_with_direction" if item.bad_has_direction else "bad_without_direction"
+        ] += 1
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8-sig") as file:
+        writer = csv.writer(file)
+        writer.writerow(
+            [
+                "source_image",
+                "bad_count",
+                "ok_count",
+                "hard_count",
+                "bad_with_direction_count",
+                "bad_without_direction_count",
+                "bad_slots",
+                "notes",
+            ]
+        )
+        for source_image in sorted({item.source_image for item in bad_items}):
+            counts = source_counts[source_image]
+            writer.writerow(
+                [
+                    source_image,
+                    counts["bad"],
+                    counts["ok"],
+                    counts["hard"],
+                    counts["bad_with_direction"],
+                    counts["bad_without_direction"],
+                    "|".join(bad_slots[source_image]),
+                    " | ".join(sorted(source_notes[source_image])),
+                ]
+            )
+
+
+def _write_crop_locator_failures_csv(
+    bad_items: list[_ReviewItem],
+    image_by_name: dict[str, _ImageRecord],
+    path: Path,
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8-sig") as file:
+        writer = csv.writer(file)
+        writer.writerow(
+            [
+                "source_image",
+                "slot",
+                "expected",
+                "bad_kind",
+                "notes",
+                "crop_path",
+                "panel_x",
+                "panel_y",
+                "panel_width",
+                "panel_height",
+                "panel_score",
+            ]
+        )
+        for item in sorted(bad_items, key=lambda value: (value.source_image, value.slot)):
+            record = image_by_name.get(item.source_image)
+            panel = record.panel if record is not None else PanelCandidate(0.0, 0, 0, 0, 0)
+            writer.writerow(
+                [
+                    item.source_image,
+                    item.slot + 1,
+                    item.expected,
+                    "wrong_direction_or_slot" if item.bad_has_direction else "empty_or_no_arrow",
+                    item.notes,
+                    item.crop_path,
+                    panel.x,
+                    panel.y,
+                    panel.width,
+                    panel.height,
+                    f"{panel.score:.6f}",
+                ]
+            )
+
+
+def _resolve_review_crop_path(review_dir: Path, crop_path: str) -> Path:
+    path = Path(crop_path)
+    if path.is_absolute():
+        return path
+    return (review_dir / path).resolve()
 
 
 def _draw_debug_image(image: np.ndarray, result: ImagePrediction) -> np.ndarray:
@@ -1340,6 +1785,43 @@ def _write_report_files(report: TrainingReport, output_dir: Path) -> None:
     _write_predictions_csv(output_dir / "predictions.csv", report.positive_results)
     _write_predictions_csv(output_dir / "negative_predictions.csv", report.negative_results)
     _write_confusion_csv(output_dir / "confusion_matrix.csv", report.confusion_matrix)
+    if report.review_summary is not None:
+        _write_review_summary_csv(
+            output_dir / "review" / "review_cleaning_report.csv",
+            report.review_summary,
+        )
+
+
+def _write_review_summary_csv(path: Path, summary: ReviewSummary) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    rows: list[tuple[str, str | int]] = [
+        ("review_results", summary.review_results),
+        ("original_crop_count", summary.original_crop_count),
+        ("reviewed_crop_count", summary.reviewed_crop_count),
+        ("ok_count", summary.ok_count),
+        ("hard_count", summary.hard_count),
+        ("bad_count", summary.bad_count),
+        ("pending_count", summary.pending_count),
+        ("label_correction_count", summary.label_correction_count),
+        ("clean_training_sample_count", summary.clean_training_sample_count),
+        ("clean_image_count", summary.clean_image_count),
+        ("bad_with_direction_count", summary.bad_with_direction_count),
+        ("bad_without_direction_count", summary.bad_without_direction_count),
+        ("missing_review_count", summary.missing_review_count),
+        ("extra_review_count", summary.extra_review_count),
+        ("images_with_bad_count", summary.images_with_bad_count),
+    ]
+    for direction in DIRECTION_NAMES:
+        rows.append(
+            (
+                f"clean_direction_{direction}_count",
+                summary.clean_direction_counts.get(direction, 0),
+            )
+        )
+    with path.open("w", newline="", encoding="utf-8-sig") as file:
+        writer = csv.writer(file)
+        writer.writerow(["metric", "value"])
+        writer.writerows(rows)
 
 
 def _write_predictions_csv(path: Path, results: list[ImagePrediction]) -> None:
@@ -1451,12 +1933,30 @@ def main() -> None:
     )
     parser.add_argument("--output", type=Path, required=True, help="Output directory.")
     parser.add_argument("--folds", type=int, default=5, help="Image-level cross validation folds.")
+    parser.add_argument(
+        "--review-results",
+        type=Path,
+        default=None,
+        help="Optional crop_review_results.csv exported from the review UI.",
+    )
     args = parser.parse_args()
 
-    report = run_training(args.positive, args.output, args.negative, args.folds)
+    report = run_training(
+        args.positive,
+        args.output,
+        args.negative,
+        args.folds,
+        args.review_results,
+    )
     print(f"positive_count={report.positive_count}")
     print(f"negative_count={report.negative_count}")
     print(f"crop_count={report.crop_count}")
+    if report.review_summary is not None:
+        print(f"review_original_crop_count={report.review_summary.original_crop_count}")
+        print(f"review_clean_training_sample_count={report.review_summary.clean_training_sample_count}")
+        print(f"review_bad_count={report.review_summary.bad_count}")
+        print(f"review_bad_with_direction_count={report.review_summary.bad_with_direction_count}")
+        print(f"review_bad_without_direction_count={report.review_summary.bad_without_direction_count}")
     print(f"cross_validation_arrow_accuracy={report.cross_validation_arrow_accuracy:.4f}")
     print(f"cross_validation_sequence_accuracy={report.cross_validation_sequence_accuracy:.4f}")
     print(f"final_positive_sequence_accuracy={report.final_positive_sequence_accuracy:.4f}")

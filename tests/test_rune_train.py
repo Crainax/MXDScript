@@ -5,7 +5,17 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from mhscript_yjs.scripts.tool.rune_train import locate_panel, parse_expected_sequence
+from mhscript_yjs.scripts.tool.rune_train import (
+    DIRECTION_NAMES,
+    PanelCandidate,
+    _apply_review_results_to_slot_records,
+    _ImageRecord,
+    _load_review_results,
+    _SlotRecord,
+    _summarize_review_results,
+    locate_panel,
+    parse_expected_sequence,
+)
 
 
 def test_parse_expected_sequence_supports_type_prefix() -> None:
@@ -44,6 +54,74 @@ def test_locate_panel_finds_synthetic_capsule() -> None:
     assert abs(panel.y - y) <= 12
     assert abs(panel.width - width) <= 25
     assert panel.score > 0.2
+
+
+def test_review_results_filter_bad_and_apply_corrections(tmp_path: Path) -> None:
+    review_path = tmp_path / "crop_review_results.csv"
+    review_path.write_text(
+        "\n".join(
+            [
+                "id,source_image,slot,expected,corrected_expected,crop_path,review,notes",
+                "type1_slot1,type1_左右上下.png,1,left,right,../crops/left/a.png,ok,",
+                "type1_slot2,type1_左右上下.png,2,right,,../crops/right/b.png,hard,",
+                "type1_slot3,type1_左右上下.png,3,up,,../crops/up/c.png,bad,错右",
+                "type1_slot4,type1_左右上下.png,4,down,,../crops/down/d.png,bad,裁偏内容无",
+            ]
+        ),
+        encoding="utf-8-sig",
+    )
+    review_items = _load_review_results(review_path)
+    review_by_slot = {
+        (item.source_image, item.slot): item
+        for item in review_items
+    }
+    slot_records = [
+        _SlotRecord(
+            image_index=0,
+            slot=index,
+            expected_index=0,
+            image_path=Path("type1_左右上下.png"),
+            reps={},
+        )
+        for index in range(4)
+    ]
+
+    clean_records, clean_keys = _apply_review_results_to_slot_records(
+        slot_records,
+        review_by_slot,
+    )
+
+    assert len(clean_records) == 2
+    assert clean_keys == {("type1_左右上下.png", 0), ("type1_左右上下.png", 1)}
+    assert DIRECTION_NAMES[clean_records[0].expected_index] == "right"
+    assert DIRECTION_NAMES[clean_records[1].expected_index] == "right"
+
+    image_records = [
+        _ImageRecord(
+            index=0,
+            path=Path("type1_左右上下.png"),
+            image=np.zeros((10, 10, 3), dtype=np.uint8),
+            expected=("left", "right", "up", "down"),
+            expected_indices=(0, 3, 0, 1),
+            panel=PanelCandidate(1.0, 1, 2, 3, 4),
+        )
+    ]
+    summary = _summarize_review_results(
+        review_results=review_path,
+        image_records=image_records,
+        all_slot_records_count=4,
+        clean_slot_records=clean_records,
+        review_items=review_items,
+        clean_slot_keys=clean_keys,
+    )
+
+    assert summary.ok_count == 1
+    assert summary.hard_count == 1
+    assert summary.bad_count == 2
+    assert summary.label_correction_count == 1
+    assert summary.clean_training_sample_count == 2
+    assert summary.bad_with_direction_count == 1
+    assert summary.bad_without_direction_count == 1
 
 
 def _draw_capsule(image: np.ndarray, x: int, y: int, width: int, height: int) -> None:

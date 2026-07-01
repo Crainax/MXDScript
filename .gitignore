@@ -16,6 +16,7 @@ work/
 outputs/
 screenshots/
 captures/
+protype/
 assets/*
 !assets/app_icon.ico
 !assets/app_icon.png

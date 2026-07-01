@@ -14,7 +14,13 @@ import numpy as np
 from mhscript_yjs.runtime.control import StopRequested
 from mhscript_yjs.runtime.logging import log_important
 from mhscript_yjs.runtime.timing import Sleeper
-from mhscript_yjs.scripts.tool.rune_debug import DIRECTION_KEYS, RuneCvRecognizer, RunePrediction
+from mhscript_yjs.scripts.tool.rune_debug import (
+    DEFAULT_RUNE_MODEL_PATH,
+    DIRECTION_KEYS,
+    RuneCvRecognizer,
+    RunePrediction,
+    load_rune_recognizer,
+)
 from mhscript_yjs.vision.screenshot import MssScreenCapture
 from mhscript_yjs.vision.types import Region
 from mhscript_yjs.windows.maple import WindowInfo, refresh_window_info
@@ -27,6 +33,7 @@ RUNE_CAPTURE_SCRIPT_ID = "rune_capture"
 DEFAULT_RUNE_CAPTURE_OPTIONS = {
     "outputDir": r"protype\RuneInstance",
     "captureIntervalSeconds": 5.0,
+    "modelPath": str(DEFAULT_RUNE_MODEL_PATH),
 }
 UNKNOWN_CONFIDENCE_THRESHOLD = 0.30
 SLOT_CROP_WIDTH = 76
@@ -47,7 +54,7 @@ def run_rune_capture(context: ScriptRunContext) -> RuneCaptureResult:
     )
     output_dir.mkdir(parents=True, exist_ok=True)
     capture = MssScreenCapture()
-    recognizer = RuneCvRecognizer()
+    recognizer, recognition_mode, model_path = _resolve_recognizer(context)
     sleeper = Sleeper(logger=context.logger, control=context.control)
     iterations = 0
     last_payload: dict[str, Any] = {}
@@ -55,9 +62,11 @@ def run_rune_capture(context: ScriptRunContext) -> RuneCaptureResult:
 
     log_important(
         context.logger,
-        "[RuneCapture] start output_dir=%s interval=%.3fs",
+        "[RuneCapture] start output_dir=%s interval=%.3fs recognizer=%s model=%s",
         output_dir,
         interval_seconds,
+        recognition_mode,
+        model_path or "",
     )
 
     try:
@@ -77,6 +86,8 @@ def run_rune_capture(context: ScriptRunContext) -> RuneCaptureResult:
                 output_dir=output_dir,
                 interval_seconds=interval_seconds,
                 saved_count=iterations,
+                recognition_mode=recognition_mode,
+                model_path=model_path,
             )
             last_payload = payload
             context.emit_data(payload)
@@ -111,6 +122,8 @@ def _payload_for_capture(
     output_dir: Path,
     interval_seconds: float,
     saved_count: int,
+    recognition_mode: str = "legacy_cv",
+    model_path: Path | None = None,
 ) -> dict[str, Any]:
     slots = []
     for slot in prediction.slots:
@@ -138,6 +151,8 @@ def _payload_for_capture(
         "capturePath": str(screenshot_path),
         "intervalSeconds": interval_seconds,
         "savedCount": saved_count,
+        "recognitionMode": recognition_mode,
+        "modelPath": str(model_path) if model_path is not None else "",
         "predictionScore": prediction.score,
         "groupCenterX": prediction.group_center_x,
         "slots": slots,
@@ -198,6 +213,36 @@ def _resolve_output_dir(context: ScriptRunContext) -> Path:
     if not path.is_absolute():
         path = context.config.project_root / path
     return path.resolve()
+
+
+def _resolve_model_path(context: ScriptRunContext) -> Path | None:
+    raw = str(context.script_options.get("modelPath", "")).strip().strip('"').strip("'")
+    if not raw:
+        return None
+    path = Path(raw)
+    if not path.is_absolute():
+        path = context.config.project_root / path
+    return path.resolve()
+
+
+def _resolve_recognizer(
+    context: ScriptRunContext,
+) -> tuple[Any, str, Path | None]:
+    model_path = _resolve_model_path(context)
+    try:
+        recognizer = load_rune_recognizer(model_path)
+    except Exception as exc:
+        context.logger.warning(
+            "[RuneCapture] model_load_failed path=%s error=%s: %s",
+            model_path or "",
+            exc.__class__.__name__,
+            exc,
+        )
+        return RuneCvRecognizer(), "legacy_cv", None
+    loaded_model_path = getattr(recognizer, "model_path", None)
+    if isinstance(loaded_model_path, Path):
+        return recognizer, "template_model", loaded_model_path
+    return recognizer, "legacy_cv", None
 
 
 def _coerce_capture_interval(value: Any) -> float:

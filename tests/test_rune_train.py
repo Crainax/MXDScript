@@ -7,7 +7,9 @@ import numpy as np
 
 from mhscript_yjs.scripts.tool.rune_train import (
     DIRECTION_NAMES,
+    MODEL_VARIANTS,
     PanelCandidate,
+    RuneTemplateModel,
     _apply_review_results_to_slot_records,
     _ImageRecord,
     _load_review_results,
@@ -142,6 +144,29 @@ def test_review_results_filter_bad_and_keep_source_labels(tmp_path: Path) -> Non
     assert summary.clean_training_sample_count == 2
     assert summary.bad_with_direction_count == 1
     assert summary.bad_without_direction_count == 1
+
+
+def test_template_model_round_trips_threshold(tmp_path: Path) -> None:
+    templates = {
+        variant: {
+            direction_index: np.full(
+                (variant[1], variant[1], 4),
+                direction_index + 1,
+                dtype=np.float32,
+            )
+            for direction_index in range(len(DIRECTION_NAMES))
+        }
+        for variant in MODEL_VARIANTS
+    }
+    model_path = tmp_path / "rune_template_model.npz"
+
+    RuneTemplateModel(templates).save(model_path, threshold=1.25)
+    loaded_model, threshold = RuneTemplateModel.load(model_path)
+
+    assert threshold == np.float32(1.25).item()
+    assert loaded_model.templates.keys() == templates.keys()
+    for variant in MODEL_VARIANTS:
+        assert np.array_equal(loaded_model.templates[variant][2], templates[variant][2])
 
 
 def _draw_capsule(image: np.ndarray, x: int, y: int, width: int, height: int) -> None:

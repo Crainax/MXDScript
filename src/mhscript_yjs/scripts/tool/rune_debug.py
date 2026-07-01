@@ -9,6 +9,20 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from mhscript_yjs.core.config import project_root
+from mhscript_yjs.scripts.tool.rune_train import (
+    DIRECTION_NAMES,
+    SLOT_FRACTIONS,
+    PanelCandidate,
+    RuneTemplateModel,
+    TemplateMatchLocation,
+    _acceptance_score,
+    _represent,
+    _slot_crop,
+    locate_panel,
+    locate_panel_expanded,
+)
+
 DIRECTION_LABELS = {
     "\u4e0a": "up",
     "\u4e0b": "down",
@@ -23,6 +37,10 @@ DIRECTION_KEYS = {
     "unknown": "?",
 }
 SLOT_OFFSETS = (-138, -46, 46, 138)
+DEFAULT_RUNE_MODEL_PATH = (
+    Path("protype") / "RuneTrainPhase5Output" / "model" / "rune_template_model.npz"
+)
+MODEL_TOP_SCORE_THRESHOLD = 0.55
 
 
 @dataclass(frozen=True)
@@ -43,6 +61,7 @@ class RunePrediction:
     group_center_x: float
     score: float
     slots: tuple[SlotPrediction, SlotPrediction, SlotPrediction, SlotPrediction]
+    selection_score: float | None = None
 
 
 @dataclass(frozen=True)
@@ -122,8 +141,139 @@ class RuneCvRecognizer:
         )
 
 
-def analyze_directory(input_dir: Path, output_dir: Path) -> RuneDirectoryReport:
-    recognizer = RuneCvRecognizer()
+class RuneModelRecognizer:
+    def __init__(self, model_path: Path) -> None:
+        self.model_path = model_path.resolve()
+        self._model, self._threshold = RuneTemplateModel.load(self.model_path)
+
+    @property
+    def threshold(self) -> float:
+        return self._threshold
+
+    def recognize(self, image: np.ndarray) -> RunePrediction:
+        legacy_panel = locate_panel(image)
+        legacy_prediction = self._recognize_with_panel(image, legacy_panel)
+        expanded_panel = locate_panel_expanded(image)
+        if _same_panel(legacy_panel, expanded_panel):
+            return legacy_prediction
+
+        expanded_prediction = self._recognize_with_panel(image, expanded_panel)
+        if _should_use_expanded_panel(
+            legacy_panel,
+            legacy_prediction,
+            expanded_panel,
+            expanded_prediction,
+        ):
+            return expanded_prediction
+        return legacy_prediction
+
+    def _recognize_with_panel(self, image: np.ndarray, panel: PanelCandidate) -> RunePrediction:
+        slots: list[SlotPrediction] = []
+        predicted: list[str] = []
+        margins: list[float] = []
+        top_scores: list[float] = []
+        for slot in range(4):
+            reps = {
+                variant: _represent(_slot_crop(image, panel, slot, variant[0]))
+                for variant in self._model.templates
+            }
+            predicted_index, margin, top_score, scores, location = self._model.predict_reps(reps)
+            match_x, match_y = _match_location_in_image(panel, slot, location)
+            predicted_name = DIRECTION_NAMES[predicted_index]
+            predicted.append(predicted_name)
+            margins.append(margin)
+            top_scores.append(top_score)
+            slots.append(
+                SlotPrediction(
+                    slot=slot,
+                    slot_x=float(match_x),
+                    predicted=predicted_name,
+                    confidence=top_score,
+                    raw_score=top_score,
+                    match_x=match_x,
+                    match_y=match_y,
+                    all_scores=scores,
+                )
+            )
+
+        acceptance_score = _acceptance_score(panel.score, margins, top_scores)
+        normalized_score = min(
+            acceptance_score / max(self._threshold, 1e-6),
+            float(np.mean(top_scores)) / MODEL_TOP_SCORE_THRESHOLD,
+        )
+        return RunePrediction(
+            predicted=tuple(predicted),  # type: ignore[arg-type]
+            group_center_x=float(np.mean([slot.slot_x for slot in slots])),
+            score=float(normalized_score),
+            slots=tuple(slots),  # type: ignore[arg-type]
+            selection_score=float(acceptance_score / max(self._threshold, 1e-6)),
+        )
+
+
+def _same_panel(first: PanelCandidate, second: PanelCandidate) -> bool:
+    return (
+        first.x == second.x
+        and first.y == second.y
+        and first.width == second.width
+        and first.height == second.height
+    )
+
+
+def _should_use_expanded_panel(
+    legacy_panel: PanelCandidate,
+    legacy_prediction: RunePrediction,
+    expanded_panel: PanelCandidate,
+    expanded_prediction: RunePrediction,
+) -> bool:
+    legacy_score = legacy_prediction.selection_score or legacy_prediction.score
+    expanded_score = expanded_prediction.selection_score or expanded_prediction.score
+    score_gain = expanded_score - legacy_score
+    if expanded_panel.y > 185:
+        return False
+    if score_gain < 0.25:
+        return False
+    return legacy_panel.score < 0.58 or score_gain >= 0.55
+
+
+def default_rune_model_path() -> Path:
+    return (project_root() / DEFAULT_RUNE_MODEL_PATH).resolve()
+
+
+def load_rune_recognizer(model_path: Path | None = None) -> RuneModelRecognizer | RuneCvRecognizer:
+    path = model_path.resolve() if model_path is not None else default_rune_model_path()
+    if path.exists():
+        return RuneModelRecognizer(path)
+    return RuneCvRecognizer()
+
+
+def _match_location_in_image(
+    panel: PanelCandidate,
+    slot: int,
+    location: TemplateMatchLocation,
+) -> tuple[int, int]:
+    fixed_x = panel.x + panel.width * SLOT_FRACTIONS[slot]
+    fixed_y = panel.y + panel.height * 0.52
+    left = fixed_x - location.big_size / 2
+    top = fixed_y - location.big_size / 2
+    return (
+        int(round(left + location.x + location.small_size / 2)),
+        int(round(top + location.y + location.small_size / 2)),
+    )
+
+
+def analyze_directory(
+    input_dir: Path,
+    output_dir: Path,
+    model_path: Path | None = None,
+) -> RuneDirectoryReport:
+    recognizer = (
+        RuneModelRecognizer(model_path.resolve())
+        if model_path is not None
+        else RuneCvRecognizer()
+    )
+    recognizer_name = (
+        "template_model" if isinstance(recognizer, RuneModelRecognizer) else "traditional_cv"
+    )
     input_dir = input_dir.resolve()
     output_dir = output_dir.resolve()
     debug_dir = output_dir / "debug"
@@ -187,9 +337,9 @@ def analyze_directory(input_dir: Path, output_dir: Path) -> RuneDirectoryReport:
         and sequence_accuracy >= 0.9
     )
     conclusion = (
-        "traditional_cv_sufficient"
+        f"{recognizer_name}_sufficient"
         if sufficient
-        else "traditional_cv_not_sufficient_for_reliable_release"
+        else f"{recognizer_name}_not_sufficient_for_reliable_release"
     )
     report = RuneDirectoryReport(
         input_dir=str(input_dir),
@@ -440,13 +590,19 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=Path("protype") / "RuneDebugOutput",
         help="Directory for summary files and debug overlays.",
     )
+    parser.add_argument(
+        "--model",
+        type=Path,
+        default=None,
+        help="Optional trained rune_template_model.npz to use instead of legacy CV.",
+    )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_arg_parser()
     args = parser.parse_args(argv)
-    report = analyze_directory(args.input, args.output)
+    report = analyze_directory(args.input, args.output, args.model)
     _print_report(report)
     return 0
 

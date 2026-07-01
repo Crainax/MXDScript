@@ -60,6 +60,14 @@ class SlotCenterCandidate:
 
 
 @dataclass(frozen=True)
+class TemplateMatchLocation:
+    x: int
+    y: int
+    big_size: int
+    small_size: int
+
+
+@dataclass(frozen=True)
 class SlotPrediction:
     slot: int
     predicted: str
@@ -188,19 +196,25 @@ class RuneTemplateModel:
     def predict_reps(
         self,
         reps: dict[tuple[int, int], np.ndarray],
-    ) -> tuple[int, float, float, dict[int, float], tuple[int, int, int]]:
+    ) -> tuple[int, float, float, dict[str, float], TemplateMatchLocation]:
         scores = np.zeros(len(DIRECTION_NAMES), np.float32)
-        best_locations: dict[int, tuple[int, int, int]] = {}
+        best_locations: dict[int, TemplateMatchLocation] = {}
+        best_location_scores: dict[int, float] = {}
         for variant, templates in self.templates.items():
             for direction_index, template in templates.items():
                 result = cv2.matchTemplate(reps[variant], template, cv2.TM_CCOEFF_NORMED)
                 _, max_value, _, max_location = cv2.minMaxLoc(result)
                 scores[direction_index] += float(max_value)
-                if direction_index not in best_locations or max_value > scores[direction_index]:
-                    best_locations[direction_index] = (
-                        int(max_location[0]),
-                        int(max_location[1]),
-                        int(variant[1]),
+                if (
+                    direction_index not in best_locations
+                    or max_value > best_location_scores[direction_index]
+                ):
+                    best_location_scores[direction_index] = float(max_value)
+                    best_locations[direction_index] = TemplateMatchLocation(
+                        x=int(max_location[0]),
+                        y=int(max_location[1]),
+                        big_size=int(variant[0]),
+                        small_size=int(variant[1]),
                     )
 
         order = np.argsort(scores)[::-1]
@@ -210,7 +224,10 @@ class RuneTemplateModel:
         return predicted_index, margin, top_score, {
             DIRECTION_NAMES[index]: float(score / max(1, len(self.templates)))
             for index, score in enumerate(scores)
-        }, best_locations.get(predicted_index, (0, 0, MODEL_VARIANTS[0][1]))
+        }, best_locations.get(
+            predicted_index,
+            TemplateMatchLocation(0, 0, MODEL_VARIANTS[0][0], MODEL_VARIANTS[0][1]),
+        )
 
     def save(self, output_path: Path, threshold: float) -> None:
         arrays: dict[str, np.ndarray] = {
@@ -223,6 +240,32 @@ class RuneTemplateModel:
                 arrays[f"template_{big_size}_{small_size}_{direction_index}"] = template
         output_path.parent.mkdir(parents=True, exist_ok=True)
         np.savez_compressed(output_path, **arrays)
+
+    @classmethod
+    def load(cls, model_path: Path) -> tuple[RuneTemplateModel, float]:
+        with np.load(model_path) as arrays:
+            variants = tuple(
+                (int(row[0]), int(row[1]))
+                for row in np.asarray(arrays["variants"], dtype=np.int32)
+            )
+            templates: dict[tuple[int, int], dict[int, np.ndarray]] = {}
+            for variant in variants:
+                big_size, small_size = variant
+                templates[variant] = {}
+                for direction_index in range(len(DIRECTION_NAMES)):
+                    key = f"template_{big_size}_{small_size}_{direction_index}"
+                    if key not in arrays:
+                        raise ValueError(f"Rune model missing template: {key}")
+                    templates[variant][direction_index] = np.asarray(
+                        arrays[key],
+                        dtype=np.float32,
+                    )
+            threshold = (
+                float(np.asarray(arrays["unknown_threshold"], dtype=np.float32)[0])
+                if "unknown_threshold" in arrays
+                else DEFAULT_UNKNOWN_THRESHOLD
+            )
+        return cls(templates), threshold
 
 
 def parse_expected_sequence(path: Path) -> tuple[str, str, str, str] | None:
@@ -353,7 +396,11 @@ def run_training(
                 relocation_review_items,
             )
 
-    slot_records = _build_slot_records(image_records)
+    training_image_records = _apply_panel_overrides_to_image_records(
+        image_records,
+        crop_panel_overrides,
+    )
+    slot_records = _build_slot_records(training_image_records)
     original_crop_count = len(slot_records)
     if review_by_slot is not None:
         slot_records, review_slot_keys = _apply_review_results_to_slot_records(
@@ -364,7 +411,7 @@ def run_training(
             raise ValueError("No training samples remain after applying review results.")
         review_summary = _summarize_review_results(
             review_results=review_results,
-            image_records=image_records,
+            image_records=training_image_records,
             all_slot_records_count=original_crop_count,
             clean_slot_records=slot_records,
             review_items=review_items,
@@ -372,7 +419,7 @@ def run_training(
         )
 
     fold_reports, cv_results, confusion = _cross_validate(
-        image_records,
+        training_image_records,
         slot_records,
         folds,
         metric_slot_keys=review_slot_keys,
@@ -381,7 +428,7 @@ def run_training(
     final_model = RuneTemplateModel.train(slot_records)
     final_positive_results = [
         _predict_positive_image(record, final_model, DEFAULT_UNKNOWN_THRESHOLD)
-        for record in image_records
+        for record in training_image_records
     ]
 
     negative_results: list[ImagePrediction] = []
@@ -402,18 +449,19 @@ def run_training(
     ]
 
     final_model.save(output_dir / "model" / "rune_template_model.npz", threshold)
-    _write_crops_and_contact_sheets(image_records, final_model, output_dir, crop_panel_overrides)
+    _write_crops_and_contact_sheets(
+        training_image_records,
+        final_model,
+        output_dir,
+        crop_panel_overrides,
+    )
     if crop_panel_overrides:
         _write_relocated_bad_crops_contact_sheet(review_items, crop_panel_overrides, output_dir)
     _write_debug_images(final_positive_results, negative_results, output_dir)
     if review_summary is not None and review_results is not None:
-        analysis_records = _apply_panel_overrides_to_image_records(
-            image_records,
-            crop_panel_overrides,
-        )
         _write_review_analysis_files(
             review_items,
-            analysis_records,
+            training_image_records,
             review_results.parent,
             output_dir,
         )

@@ -51,6 +51,10 @@ class ScriptManagerTests(unittest.TestCase):
         self.assertEqual(scripts[6]["defaultShortcut"], "Ctrl+F7")
         self.assertEqual(scripts[6]["defaultOptions"]["outputDir"], r"protype\RuneInstance")
         self.assertEqual(scripts[6]["defaultOptions"]["captureIntervalSeconds"], 5.0)
+        self.assertEqual(
+            scripts[6]["defaultOptions"]["modelPath"],
+            r"protype\RuneTrainPhase5Output\model\rune_template_model.npz",
+        )
 
     def test_script_logger_uses_unique_file_per_run(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

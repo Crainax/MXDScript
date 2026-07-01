@@ -312,11 +312,16 @@ def run_training(
     folds: int = 5,
     review_results: Path | None = None,
     relocate_reviewed_bad: bool = False,
+    relocate_source_results: list[Path] | None = None,
 ) -> TrainingReport:
     positive_dir = positive_dir.resolve()
     output_dir = output_dir.resolve()
     negative_dir = negative_dir.resolve() if negative_dir is not None else None
     review_results = review_results.resolve() if review_results is not None else None
+    relocate_source_results = [
+        path.resolve()
+        for path in (relocate_source_results or [])
+    ]
     output_dir.mkdir(parents=True, exist_ok=True)
 
     image_records = _load_positive_records(positive_dir)
@@ -324,6 +329,11 @@ def run_training(
     review_slot_keys: set[tuple[str, int]] | None = None
     review_summary: ReviewSummary | None = None
     crop_panel_overrides: dict[str, PanelCandidate] = {}
+    relocation_review_items: list[_ReviewItem] = []
+    if relocate_reviewed_bad:
+        for source_results in relocate_source_results:
+            relocation_review_items.extend(_load_review_results(source_results))
+
     if review_results is not None:
         review_items = _load_review_results(review_results)
         review_by_slot = {
@@ -333,10 +343,15 @@ def run_training(
         if relocate_reviewed_bad:
             crop_panel_overrides = _build_reviewed_bad_panel_overrides(
                 image_records,
-                review_items,
+                [*review_items, *relocation_review_items],
             )
     else:
         review_by_slot = None
+        if relocate_reviewed_bad and relocation_review_items:
+            crop_panel_overrides = _build_reviewed_bad_panel_overrides(
+                image_records,
+                relocation_review_items,
+            )
 
     slot_records = _build_slot_records(image_records)
     original_crop_count = len(slot_records)
@@ -1379,7 +1394,7 @@ def _write_relocated_bad_crops_contact_sheet(
     review_dir = output_dir / "review"
     tiles: list[tuple[np.ndarray, str, str, bool]] = []
     for item in review_items:
-        if item.review != "bad" or item.source_image not in panel_overrides:
+        if item.source_image not in panel_overrides:
             continue
         crop_path = _resolve_review_crop_path(review_dir, item.crop_path)
         if not crop_path.exists():
@@ -2164,6 +2179,16 @@ def main() -> None:
             "for a new review pass."
         ),
     )
+    parser.add_argument(
+        "--relocate-source-results",
+        type=Path,
+        action="append",
+        default=[],
+        help=(
+            "Additional crop_review_results.csv files whose Bad source images "
+            "should also be relocated."
+        ),
+    )
     args = parser.parse_args()
 
     report = run_training(
@@ -2173,6 +2198,7 @@ def main() -> None:
         args.folds,
         args.review_results,
         args.relocate_reviewed_bad,
+        args.relocate_source_results,
     )
     print(f"positive_count={report.positive_count}")
     print(f"negative_count={report.negative_count}")

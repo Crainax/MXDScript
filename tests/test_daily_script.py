@@ -144,6 +144,24 @@ class FakeRuneSolver:
         )
 
 
+class FakeRuneSolverSequence:
+    def __init__(
+        self,
+        events: list[str],
+        results: list[RunePressAttempt],
+        *,
+        max_attempts: int = 5,
+    ) -> None:
+        self.events = events
+        self.results = results
+        self.config = RuneSolverConfig(max_attempts=max_attempts, retry_delay_ms=0)
+
+    def trigger_and_press(self, window: WindowInfo, *, attempt: int) -> RunePressAttempt:
+        self.events.append(f"trigger:{attempt}")
+        index = min(attempt - 1, len(self.results) - 1)
+        return self.results[index]
+
+
 class DailyScriptTests(unittest.TestCase):
     def test_release_rune_sub_uses_python_solver_instead_of_legacy_pause(self) -> None:
         runner = DailyRunner(
@@ -200,6 +218,56 @@ class DailyScriptTests(unittest.TestCase):
         runner._solve_rune(_rune_match())  # noqa: SLF001
 
         self.assertEqual(events, ["move", "close", "pause"])
+
+    def test_solve_rune_ui_missing_leaves_position_and_returns(self) -> None:
+        events: list[str] = []
+        runner = DailyRunner(
+            config=load_config(load_local=False),
+            device=DryRunDevice(),
+            matcher=FakeMatcher(),  # type: ignore[arg-type]
+            sleeper=NullSleeper(),
+            logger=logging.getLogger("test.daily_script"),
+            window_info=WindowInfo(hwnd=100, title="MapleStory", x=10, y=20, width=800, height=600),
+            rune_solver=FakeRuneSolverSequence(
+                events,
+                [RunePressAttempt("ui_missing", 1, "rune_ui_missing:test")],
+            ),  # type: ignore[arg-type]
+        )
+        runner._move_to_rune_icon = lambda rune: events.append("move") or True  # type: ignore[method-assign]
+        runner._scheduler_panel_visible = lambda: False  # type: ignore[method-assign]
+        runner._move_to_rune_verify_position = lambda: events.append("leave") or True  # type: ignore[method-assign]
+
+        runner._solve_rune(_rune_match())  # noqa: SLF001
+
+        self.assertEqual(events, ["move", "trigger:1", "leave"])
+        self.assertEqual(runner.vars["RuneUiMissingAttempts"], 1)
+
+    def test_solve_rune_pauses_after_repeated_ui_missing(self) -> None:
+        events: list[str] = []
+        paused: list[str] = []
+        runner = DailyRunner(
+            config=load_config(load_local=False),
+            device=DryRunDevice(),
+            matcher=FakeMatcher(),  # type: ignore[arg-type]
+            sleeper=NullSleeper(),
+            logger=logging.getLogger("test.daily_script"),
+            window_info=WindowInfo(hwnd=100, title="MapleStory", x=10, y=20, width=800, height=600),
+            rune_solver=FakeRuneSolverSequence(
+                events,
+                [RunePressAttempt("ui_missing", 1, "rune_ui_missing:test")],
+            ),  # type: ignore[arg-type]
+        )
+        runner.vars["RuneUiMissingAttempts"] = 4
+        runner._move_to_rune_icon = lambda rune: events.append("move") or True  # type: ignore[method-assign]
+        runner._scheduler_panel_visible = lambda: False  # type: ignore[method-assign]
+        runner._move_to_rune_verify_position = lambda: events.append("leave") or True  # type: ignore[method-assign]
+        runner._pause_for_manual_rune = lambda last_attempt: paused.append(last_attempt.reason)  # type: ignore[method-assign]
+
+        runner._solve_rune(_rune_match())  # noqa: SLF001
+
+        self.assertEqual(events, ["move", "trigger:1"])
+        self.assertEqual(runner.vars["RuneUiMissingAttempts"], 5)
+        self.assertEqual(paused, ["连续5次PageDown未打开符文UI:rune_ui_missing:test"])
 
     def test_initializes_job_even_when_all_modules_are_disabled(self) -> None:
         device = DryRunDevice()

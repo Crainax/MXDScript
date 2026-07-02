@@ -250,6 +250,7 @@ class LevelingRunner(DailyRunner):
                 "yanusTime": 0,
                 "Key7Time": 0,
                 "RuneCooldown": 0,
+                "RuneUiMissingAttempts": 0,
                 "patrolTime": now,
                 "map": 0,
             }

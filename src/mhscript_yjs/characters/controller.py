@@ -11,6 +11,29 @@ from mhscript_yjs.runtime.logging import log_important
 
 
 @dataclass
+class VerticalSettleResult:
+    position: CharacterPosition | None
+    elapsed_ms: int
+    moved: bool
+
+
+@dataclass
+class DownMoveObservation:
+    start: CharacterPosition
+    end: CharacterPosition
+    elapsed_ms: int
+    suspected_rope: bool
+
+    @property
+    def delta_x(self) -> int:
+        return self.end.x - self.start.x
+
+    @property
+    def delta_y(self) -> int:
+        return self.end.y - self.start.y
+
+
+@dataclass
 class CharacterController:
     tracker: PositionTracker
     actions: CharacterActions
@@ -18,14 +41,13 @@ class CharacterController:
     logger: Logger
     jump_range: int = 24
     max_move_attempts: int = 80
-    static_position: CharacterPosition | None = None
-    static_count: int = 0
     _up_retry_level: int = 0
+    _down_rope_streak: int = 0
+    _last_down_observation: DownMoveObservation | None = None
 
     def reset_map_state(self) -> None:
-        self.static_position = None
-        self.static_count = 0
         self._up_retry_level = 0
+        self._clear_down_rope_state()
 
     def locate(self, *, recover: bool = True, use_cache: bool = True) -> CharacterPosition | None:
         return self.tracker.locate(recover=recover, use_cache=use_cache)
@@ -48,7 +70,6 @@ class CharacterController:
                 continue
 
             last_position = position
-            self._anti_jam(position)
             dx = target.x - position.x
             dy = target.y - position.y
             tol_x = max(target.x_tolerance, 2)
@@ -64,16 +85,20 @@ class CharacterController:
             )
 
             if position.x < target.x - self.jump_range:
+                self._clear_down_rope_state()
                 self.logger.info("[Move] 动作=向右长距离移动")
                 self.move_right_long(position, target)
             elif position.x > target.x + self.jump_range:
+                self._clear_down_rope_state()
                 self.logger.info("[Move] 动作=向左长距离移动")
                 self.move_left_long(position, target)
             elif position.x < target.x - tol_x:
+                self._clear_down_rope_state()
                 duration = _clamp((target.x - tol_x - position.x) * 52, 52, 1800)
                 self.logger.info("[Move] 动作=向右微调 duration_ms=%s", duration)
                 self.actions.hold("Right", duration)
             elif position.x > target.x + tol_x:
+                self._clear_down_rope_state()
                 duration = _clamp((position.x - target.x - tol_x) * 52, 52, 1800)
                 self.logger.info("[Move] 动作=向左微调 duration_ms=%s", duration)
                 self.actions.hold("Left", duration)
@@ -85,12 +110,23 @@ class CharacterController:
                     last_position = moved_position
             elif position.y > target.y + target.y_tolerance:
                 self.logger.info("[Move] 动作=向上移动")
+                self._clear_down_rope_state()
                 moved_position = self.move_up(position, target)
                 if moved_position is not None:
                     last_position = moved_position
                     self._record_up_movement(position, moved_position, target)
             else:
+                if self._last_down_observation is not None and self._last_down_observation.suspected_rope:
+                    recovered_position = self._recover_from_rope(
+                        position,
+                        target,
+                        reason="within_tolerance_after_short_down_steps",
+                    )
+                    if recovered_position is not None:
+                        last_position = recovered_position
+                    continue
                 self._up_retry_level = 0
+                self._clear_down_rope_state()
                 log_important(
                     self.logger,
                     "[Move] 已到达 (%s,%s)，当前=(%s,%s)，尝试次数=%s",
@@ -140,12 +176,24 @@ class CharacterController:
                 self.actions.key_up("Space")
                 self.actions.delay_random(66, 67)
             self.actions.key_up("Down")
-        return self._wait_vertical_settle(
+        settle = self._wait_vertical_settle_result(
             position,
             target,
             direction="down",
             timeout_ms=self._down_settle_timeout_ms(position, target),
         )
+        moved_position = settle.position
+        if moved_position is not None:
+            self._record_down_movement(position, moved_position, target, settle)
+            if self._down_rope_streak >= 2:
+                recovered_position = self._recover_from_rope(
+                    moved_position,
+                    target,
+                    reason="repeated_short_down_steps",
+                )
+                if recovered_position is not None:
+                    return recovered_position
+        return moved_position
 
     def wait_stable_big(self, current_y: int | None = None) -> bool:
         position_y = current_y
@@ -197,6 +245,27 @@ class CharacterController:
         stable_samples: int = 3,
         unchanged_grace_ms: int = 260,
     ) -> CharacterPosition | None:
+        return self._wait_vertical_settle_result(
+            start,
+            target,
+            direction=direction,
+            timeout_ms=timeout_ms,
+            poll_ms=poll_ms,
+            stable_samples=stable_samples,
+            unchanged_grace_ms=unchanged_grace_ms,
+        ).position
+
+    def _wait_vertical_settle_result(
+        self,
+        start: CharacterPosition,
+        target: MoveTarget,
+        *,
+        direction: str,
+        timeout_ms: int,
+        poll_ms: int = 35,
+        stable_samples: int = 3,
+        unchanged_grace_ms: int = 260,
+    ) -> VerticalSettleResult:
         started_at = self.now()
         deadline = started_at + max(1, timeout_ms) / 1000
         last_y: int | None = None
@@ -238,7 +307,7 @@ class CharacterController:
                         current.y,
                         elapsed_ms,
                     )
-                    return current
+                    return VerticalSettleResult(current, elapsed_ms, moved)
                 continue
             if direction == "up" and self._upward_peak_without_landing(current, target, rebound):
                 continue
@@ -251,8 +320,9 @@ class CharacterController:
                 target.y,
                 elapsed_ms,
             )
-            return current
+            return VerticalSettleResult(current, elapsed_ms, moved)
 
+        elapsed_ms = int((self.now() - started_at) * 1000)
         self.logger.info(
             "[MoveVertical] timeout direction=%s start_y=%s best_y=%s target_y=%s timeout_ms=%s",
             direction,
@@ -261,7 +331,7 @@ class CharacterController:
             target.y,
             timeout_ms,
         )
-        return best
+        return VerticalSettleResult(best, elapsed_ms, moved)
 
     def _upward_peak_without_landing(
         self,
@@ -306,26 +376,112 @@ class CharacterController:
             self.logger.info("[MoveUp] 上跳已产生有效抬升，清除失败升级")
         self._up_retry_level = 0
 
-    def _anti_jam(self, position: CharacterPosition) -> None:
-        if self.static_position and self.static_position.x == position.x and self.static_position.y == position.y:
-            self.static_count += 1
-        else:
-            self.static_position = position
-            self.static_count = 0
-        if self.static_count < 5:
+    def _record_down_movement(
+        self,
+        start: CharacterPosition,
+        current: CharacterPosition,
+        target: MoveTarget,
+        settle: VerticalSettleResult,
+    ) -> None:
+        suspected_rope = self._is_suspected_rope_down_step(start, current, settle)
+        observation = DownMoveObservation(
+            start=start,
+            end=current,
+            elapsed_ms=settle.elapsed_ms,
+            suspected_rope=suspected_rope,
+        )
+        self._last_down_observation = observation
+        if suspected_rope:
+            self._down_rope_streak += 1
+            log_important(
+                self.logger,
+                "[MoveDown] 检测到疑似绳子下爬：start=(%s,%s) current=(%s,%s) "
+                "delta=(%s,%s) elapsed_ms=%s streak=%s target=(%s,%s) toleranceY=%s",
+                start.x,
+                start.y,
+                current.x,
+                current.y,
+                observation.delta_x,
+                observation.delta_y,
+                settle.elapsed_ms,
+                self._down_rope_streak,
+                target.x,
+                target.y,
+                target.y_tolerance,
+            )
             return
-        self.logger.warning("[Move] 检测到疑似卡住，执行右跳脱困")
+        if self._down_rope_streak:
+            self.logger.info("[MoveDown] 向下移动恢复正常，清除疑似绳子计数")
+        self._clear_down_rope_state()
+
+    def _is_suspected_rope_down_step(
+        self,
+        start: CharacterPosition,
+        current: CharacterPosition,
+        settle: VerticalSettleResult,
+    ) -> bool:
+        delta_y = current.y - start.y
+        if not settle.moved or delta_y <= 0:
+            return False
+        if abs(current.x - start.x) > 1:
+            return False
+        if delta_y > 8:
+            return False
+        return settle.elapsed_ms <= 700
+
+    def _recover_from_rope(
+        self,
+        position: CharacterPosition,
+        target: MoveTarget,
+        *,
+        reason: str,
+    ) -> CharacterPosition | None:
+        observation = self._last_down_observation
+        if observation is None:
+            return None
+        log_important(
+            self.logger,
+            "[MoveDown] 疑似处于绳子上，改用长按 Down 脱离：reason=%s current=(%s,%s) "
+            "target=(%s,%s) last_delta=(%s,%s) streak=%s",
+            reason,
+            position.x,
+            position.y,
+            target.x,
+            target.y,
+            observation.delta_x,
+            observation.delta_y,
+            self._down_rope_streak,
+        )
         self.actions.release_all()
         self.actions.delay_random(13, 15)
-        self.actions.key_down("Right")
+        self.actions.key_down("Down")
         try:
-            self.actions.delay_random(21, 22)
-            self.actions.hold_random("Space", 76, 77)
-            self.actions.delay_random(44, 45)
+            self.actions.delay_random(650, 800)
         finally:
-            self.actions.key_up("Right")
-        self.actions.delay_random(13, 15)
-        self.static_count = 0
+            self.actions.key_up("Down")
+        recovered = self._wait_vertical_settle(
+            position,
+            target,
+            direction="down",
+            timeout_ms=1400,
+            stable_samples=3,
+            unchanged_grace_ms=350,
+        )
+        if recovered is not None:
+            log_important(
+                self.logger,
+                "[MoveDown] 绳子脱离后重新定位：current=(%s,%s) target=(%s,%s)",
+                recovered.x,
+                recovered.y,
+                target.x,
+                target.y,
+            )
+        self._clear_down_rope_state()
+        return recovered
+
+    def _clear_down_rope_state(self) -> None:
+        self._down_rope_streak = 0
+        self._last_down_observation = None
 
     def _skill_available(self, name: str, paths: tuple[str, ...]) -> bool:
         match = self.match_image(name, paths, self.tracker.skill_region(), 1.0)

@@ -66,6 +66,38 @@ class CharacterMovementTests(unittest.TestCase):
         self.assertIn((66, 67), sleeper.random_ranges)
         self.assertTrue(all(call == (False, False) for call in tracker.locate_calls))
 
+    def test_repeated_short_down_steps_detect_rope_and_hold_down(self) -> None:
+        device = DryRunDevice()
+        tracker = _SequenceTracker(
+            [
+                _position_xy(161, 105),
+                _position_xy(161, 108),
+                _position_xy(161, 108),
+                _position_xy(161, 108),
+                _position_xy(161, 108),
+                _position_xy(161, 112),
+                _position_xy(161, 113),
+                _position_xy(161, 113),
+                _position_xy(161, 113),
+                _position_xy(161, 114),
+                _position_xy(161, 114),
+                _position_xy(161, 114),
+                _position_xy(161, 114),
+            ]
+        )
+        controller = _controller(tracker, device=device)
+
+        with self.assertLogs("test.character", level="INFO") as logs:
+            result = controller.move_to(MoveTarget(161, 114, x_tolerance=2, y_tolerance=1))
+
+        self.assertTrue(result.reached)
+        key_downs = _key_downs(device)
+        self.assertGreaterEqual(key_downs.count(keycode("Down")), 3)
+        self.assertNotIn(keycode("Right"), key_downs)
+        log_text = "\n".join(logs.output)
+        self.assertIn("疑似绳子", log_text)
+        self.assertIn("长按 Down", log_text)
+
     def test_live_locate_reuses_cached_anchor_and_only_matches_character(self) -> None:
         calls: list[str] = []
 
@@ -263,11 +295,13 @@ def _controller(
     tracker: _SequenceTracker,
     *,
     sleeper: NullSleeper | None = None,
+    device: DryRunDevice | None = None,
 ) -> _ProbeController:
     sleeper = sleeper or _RecordingSleeper()
+    device = device or DryRunDevice()
     return _ProbeController(
         tracker=tracker,  # type: ignore[arg-type]
-        actions=CharacterActions(DryRunDevice(), sleeper, logging.getLogger("test.character")),
+        actions=CharacterActions(device, sleeper, logging.getLogger("test.character")),
         match_image=lambda *_args, **_kwargs: None,
         logger=logging.getLogger("test.character"),
     )
@@ -311,6 +345,10 @@ def _key_downs(device: DryRunDevice) -> list[int]:
 
 def _position(y: int) -> CharacterPosition:
     return CharacterPosition(x=0, y=y, screen_x=0, screen_y=y, anchor_screen_x=0, anchor_screen_y=0)
+
+
+def _position_xy(x: int, y: int) -> CharacterPosition:
+    return CharacterPosition(x=x, y=y, screen_x=x, screen_y=y, anchor_screen_x=0, anchor_screen_y=0)
 
 
 def _position_at(

@@ -243,6 +243,7 @@ class DailyRunner:
                 "facing": 0,
                 "startTime": 0,
                 "RuneCooldown": 0,
+                "RuneUiMissingAttempts": 0,
                 "patrolTime": 0,
                 "questPointer": 0,
                 "mapOrder": 0,
@@ -912,6 +913,10 @@ class DailyRunner:
 
             last_attempt = solver.trigger_and_press(self._current_window_info(), attempt=attempt)
             if not last_attempt.pressed:
+                if last_attempt.status == "ui_missing":
+                    self._handle_rune_ui_missing(last_attempt, attempt, solver.config.max_attempts)
+                    return
+                self.vars["RuneUiMissingAttempts"] = 0
                 log_important(
                     self.logger,
                     "[解符文] 第 %s/%s 次未按方向键，原因：%s",
@@ -921,6 +926,7 @@ class DailyRunner:
                 )
                 continue
 
+            self.vars["RuneUiMissingAttempts"] = 0
             verified, remaining_rune = self._leave_rune_and_find_remaining()
             at_rune = False
             if verified and remaining_rune is None:
@@ -961,6 +967,53 @@ class DailyRunner:
                 self.sleeper.delay_ms(solver.config.retry_delay_ms)
 
         self._pause_for_manual_rune(last_attempt)
+
+    def _handle_rune_ui_missing(
+        self,
+        last_attempt: RunePressAttempt,
+        attempt: int,
+        max_attempts: int,
+    ) -> None:
+        missing_attempts = int(self.vars.get("RuneUiMissingAttempts", 0)) + 1
+        self.vars["RuneUiMissingAttempts"] = missing_attempts
+        log_important(
+            self.logger,
+            "[解符文] 第 %s/%s 次 PageDown 未打开符文UI，疑似站位不可交互或仍在绳子上；"
+            "连续站位失败=%s/%s，原因：%s",
+            attempt,
+            max_attempts,
+            missing_attempts,
+            max_attempts,
+            last_attempt.reason,
+        )
+        if missing_attempts >= max_attempts:
+            log_important(
+                self.logger,
+                "[解符文] 连续 %s 次未能打开符文UI，暂停等待手动处理",
+                missing_attempts,
+            )
+            self._pause_for_manual_rune(
+                RunePressAttempt(
+                    status="ui_missing",
+                    attempt=attempt,
+                    reason=f"连续{missing_attempts}次PageDown未打开符文UI:{last_attempt.reason}",
+                    screenshot_path=last_attempt.screenshot_path,
+                )
+            )
+            return
+
+        if not self._move_to_rune_verify_position():
+            log_important(
+                self.logger,
+                "[解符文] PageDown 未打开符文UI后尝试离开符文坐标失败，暂停等待手动处理",
+            )
+            self._pause_for_manual_rune(last_attempt)
+            return
+
+        log_important(
+            self.logger,
+            "[解符文] 已离开当前符文坐标，本轮 ReleaseRune 结束；等待主循环重新检测符文",
+        )
 
     def _prepare_rune_trigger_ui(self) -> bool:
         if not self._scheduler_panel_visible():
@@ -1086,6 +1139,7 @@ class DailyRunner:
     def _mark_rune_solved(self) -> None:
         self.vars["RuneCooldown"] = self._get_timestamp()
         self.vars["lastCheckTime"] = 0
+        self.vars["RuneUiMissingAttempts"] = 0
 
     def _pause_for_manual_rune(self, last_attempt: RunePressAttempt | None) -> None:
         reason = last_attempt.reason if last_attempt is not None else "未知原因"

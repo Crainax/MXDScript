@@ -104,6 +104,7 @@ class LynnController(CharacterController):
         self.actions.delay(325)
 
     def move_up(self, position: CharacterPosition, target: MoveTarget) -> CharacterPosition | None:
+        retry_up = self._upward_retry_level(max_level=1) > 0
         if position.y > target.y + 40:
             self.actions.delay_random(15, 25)
             self.actions.key_down("Up")
@@ -125,7 +126,9 @@ class LynnController(CharacterController):
                 direction="up",
                 timeout_ms=1900,
             )
-        elif position.y > target.y + 32:
+        elif retry_up or position.y > target.y + 32:
+            if retry_up:
+                self.logger.info("[MoveUp] 使用失败升级：Lynn 改用 LAlt 上跳")
             self.actions.hold_random("LAlt", 69, 70)
             return self._wait_vertical_settle(
                 position,

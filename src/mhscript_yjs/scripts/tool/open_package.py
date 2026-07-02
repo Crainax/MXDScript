@@ -7,6 +7,7 @@ from pathlib import Path
 
 from mhscript_yjs.core.config import ProjectConfig, load_config
 from mhscript_yjs.drivers.base import InputDevice
+from mhscript_yjs.drivers.controlled import ControlledInputDevice
 from mhscript_yjs.drivers.dry_run import DryRunDevice
 from mhscript_yjs.drivers.keycodes import VK_ENTER
 from mhscript_yjs.drivers.yjs import YjsDevice
@@ -420,10 +421,11 @@ def create_runner(
             "python -m pip install -e ."
         ) from exc
     matcher = TemplateMatcher(capture=capture, logger=logger)
-    device: InputDevice = (
+    raw_device: InputDevice = (
         DryRunDevice(logger=logger) if dry_run else YjsDevice(config.yjs, logger=logger)
     )
     run_control = control or NullRunControl()
+    device: InputDevice = ControlledInputDevice(raw_device, run_control)
     sleeper: Sleeper = (
         NullSleeper(logger=logger, control=run_control)
         if skip_delays

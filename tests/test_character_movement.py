@@ -7,8 +7,11 @@ from dataclasses import dataclass, field
 from mhscript_yjs.characters.actions import CharacterActions
 from mhscript_yjs.characters.base import MoveTarget
 from mhscript_yjs.characters.controller import CharacterController
+from mhscript_yjs.characters.lara import LaraController
+from mhscript_yjs.characters.lynn import LynnController
 from mhscript_yjs.characters.position import CharacterPosition, PositionTracker
 from mhscript_yjs.drivers.dry_run import DryRunDevice
+from mhscript_yjs.drivers.keycodes import keycode
 from mhscript_yjs.runtime.timing import NullSleeper
 from mhscript_yjs.vision.types import MatchResult
 from mhscript_yjs.windows.maple import WindowInfo
@@ -148,6 +151,59 @@ class CharacterMovementTests(unittest.TestCase):
 
         self.assertNotIn("move_to", [action.name for action in device.actions])
 
+    def test_failed_upward_jump_marks_next_attempt_for_upgrade(self) -> None:
+        tracker = _SequenceTracker([_position(104), _position(104), _position(82)])
+        controller = _retry_controller(
+            tracker,
+            up_results=[_position(104), _position(82)],
+        )
+
+        result = controller.move_to(MoveTarget(0, 82))
+
+        self.assertTrue(result.reached)
+        self.assertEqual(controller.retry_levels, [0, 1])
+        self.assertEqual(controller._up_retry_level, 0)  # noqa: SLF001
+
+    def test_effective_upward_progress_keeps_fast_branch(self) -> None:
+        tracker = _SequenceTracker([_position(114), _position(104), _position(82)])
+        controller = _retry_controller(
+            tracker,
+            up_results=[_position(104), _position(82)],
+        )
+
+        result = controller.move_to(MoveTarget(0, 82))
+
+        self.assertTrue(result.reached)
+        self.assertEqual(controller.retry_levels, [0, 0])
+
+    def test_lynn_failed_small_up_retry_uses_lalt_branch(self) -> None:
+        device = DryRunDevice()
+        controller = _lynn_controller(
+            _SequenceTracker([_position(82), _position(82), _position(82)]),
+            device=device,
+        )
+        controller._up_retry_level = 1  # noqa: SLF001
+
+        controller.move_up(_position(104), MoveTarget(0, 82))
+
+        key_downs = _key_downs(device)
+        self.assertEqual(key_downs[0], keycode("LAlt"))
+        self.assertNotIn(keycode("Up"), key_downs)
+
+    def test_lara_failed_small_up_retry_uses_high_jump_branch(self) -> None:
+        device = DryRunDevice()
+        controller = _lara_controller(
+            _SequenceTracker([_position(82), _position(82), _position(82)]),
+            device=device,
+        )
+        controller._up_retry_level = 1  # noqa: SLF001
+
+        controller.move_up(_position(104), MoveTarget(0, 82))
+
+        key_downs = _key_downs(device)
+        self.assertEqual(key_downs[0], keycode("Alt"))
+        self.assertNotIn(keycode("LAlt"), key_downs)
+
 
 class _ProbeController(CharacterController):
     def stand_attack(self) -> None:
@@ -161,6 +217,16 @@ class _ProbeController(CharacterController):
 
     def move_up(self, position: CharacterPosition, target: MoveTarget) -> CharacterPosition | None:
         return self._wait_vertical_settle(position, target, direction="up", timeout_ms=1000)
+
+
+@dataclass
+class _RetryProbeController(_ProbeController):
+    up_results: list[CharacterPosition] = field(default_factory=list)
+    retry_levels: list[int] = field(default_factory=list)
+
+    def move_up(self, position: CharacterPosition, target: MoveTarget) -> CharacterPosition | None:
+        self.retry_levels.append(self._upward_retry_level(max_level=1))  # noqa: SLF001
+        return self.up_results.pop(0)
 
 
 @dataclass
@@ -205,6 +271,42 @@ def _controller(
         match_image=lambda *_args, **_kwargs: None,
         logger=logging.getLogger("test.character"),
     )
+
+
+def _retry_controller(
+    tracker: _SequenceTracker,
+    *,
+    up_results: list[CharacterPosition],
+) -> _RetryProbeController:
+    return _RetryProbeController(
+        tracker=tracker,  # type: ignore[arg-type]
+        actions=CharacterActions(DryRunDevice(), _RecordingSleeper(), logging.getLogger("test.character")),
+        match_image=lambda *_args, **_kwargs: None,
+        logger=logging.getLogger("test.character"),
+        up_results=up_results,
+    )
+
+
+def _lynn_controller(tracker: _SequenceTracker, *, device: DryRunDevice) -> LynnController:
+    return LynnController(
+        tracker=tracker,  # type: ignore[arg-type]
+        actions=CharacterActions(device, NullSleeper(), logging.getLogger("test.character")),
+        match_image=lambda *_args, **_kwargs: None,
+        logger=logging.getLogger("test.character"),
+    )
+
+
+def _lara_controller(tracker: _SequenceTracker, *, device: DryRunDevice) -> LaraController:
+    return LaraController(
+        tracker=tracker,  # type: ignore[arg-type]
+        actions=CharacterActions(device, NullSleeper(), logging.getLogger("test.character")),
+        match_image=lambda *_args, **_kwargs: None,
+        logger=logging.getLogger("test.character"),
+    )
+
+
+def _key_downs(device: DryRunDevice) -> list[int]:
+    return [int(action.args[0]) for action in device.actions if action.name == "key_down"]
 
 
 def _position(y: int) -> CharacterPosition:

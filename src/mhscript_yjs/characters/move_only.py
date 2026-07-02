@@ -41,7 +41,10 @@ class MoveOnlyController(CharacterController):
         self.actions.delay_random(256, 261)
 
     def move_up(self, position: CharacterPosition, target: MoveTarget) -> CharacterPosition | None:
-        if position.y > target.y + 25:
+        retry_up = self._upward_retry_level(max_level=1) > 0
+        if retry_up or position.y > target.y + 25:
+            if retry_up:
+                self.logger.info("[MoveUp] 使用失败升级：MoveOnly 改用高段上跳")
             self.actions.hold_random("Alt", 69, 70)
             return self._wait_vertical_settle(
                 position,

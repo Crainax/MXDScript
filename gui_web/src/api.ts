@@ -130,7 +130,19 @@ async function requestJson(path: string, init: RequestInit = {}): Promise<ApiRes
     },
   });
 
-  const payload = (await response.json()) as ApiResponse;
+  const raw = await response.text();
+  if (!raw.trim()) {
+    throw new Error(`接口 ${path} 返回空响应（HTTP ${response.status}），请确认 GUI API 后端已启动`);
+  }
+
+  let payload: ApiResponse;
+  try {
+    payload = JSON.parse(raw) as ApiResponse;
+  } catch {
+    throw new Error(
+      `接口 ${path} 返回非 JSON 内容（HTTP ${response.status}），请确认 Vite 代理指向 GUI API 后端`,
+    );
+  }
   if (!response.ok && payload.ok !== false) {
     throw new Error(`HTTP ${response.status}`);
   }

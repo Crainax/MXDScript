@@ -20,10 +20,12 @@ class CharacterController:
     max_move_attempts: int = 80
     static_position: CharacterPosition | None = None
     static_count: int = 0
+    _up_retry_level: int = 0
 
     def reset_map_state(self) -> None:
         self.static_position = None
         self.static_count = 0
+        self._up_retry_level = 0
 
     def locate(self, *, recover: bool = True, use_cache: bool = True) -> CharacterPosition | None:
         return self.tracker.locate(recover=recover, use_cache=use_cache)
@@ -37,6 +39,7 @@ class CharacterController:
             target.x_tolerance,
             target.y_tolerance,
         )
+        self._up_retry_level = 0
         last_position: CharacterPosition | None = None
         for attempt in range(1, self.max_move_attempts + 1):
             position = self.locate(recover=True)
@@ -76,6 +79,7 @@ class CharacterController:
                 self.actions.hold("Left", duration)
             elif position.y < target.y - target.y_tolerance:
                 self.logger.info("[Move] 动作=向下移动")
+                self._up_retry_level = 0
                 moved_position = self.move_down(position, target)
                 if moved_position is not None:
                     last_position = moved_position
@@ -84,7 +88,9 @@ class CharacterController:
                 moved_position = self.move_up(position, target)
                 if moved_position is not None:
                     last_position = moved_position
+                    self._record_up_movement(position, moved_position, target)
             else:
+                self._up_retry_level = 0
                 log_important(
                     self.logger,
                     "[Move] 已到达 (%s,%s)，当前=(%s,%s)，尝试次数=%s",
@@ -273,6 +279,32 @@ class CharacterController:
     def _down_settle_timeout_ms(self, position: CharacterPosition, target: MoveTarget) -> int:
         distance = max(0, target.y - position.y)
         return _clamp(distance * 45 + 500, 800, 1800)
+
+    def _upward_retry_level(self, *, max_level: int = 1) -> int:
+        return min(max(0, self._up_retry_level), max(0, max_level))
+
+    def _record_up_movement(
+        self,
+        start: CharacterPosition,
+        current: CharacterPosition,
+        target: MoveTarget,
+    ) -> None:
+        still_needs_up = current.y > target.y + target.y_tolerance
+        progress = start.y - current.y
+        min_progress = max(2, target.y_tolerance + 1)
+        if still_needs_up and progress < min_progress:
+            self._up_retry_level += 1
+            self.logger.info(
+                "[MoveUp] 上跳未有效抬升 start_y=%s current_y=%s target_y=%s retry_level=%s",
+                start.y,
+                current.y,
+                target.y,
+                self._up_retry_level,
+            )
+            return
+        if self._up_retry_level:
+            self.logger.info("[MoveUp] 上跳已产生有效抬升，清除失败升级")
+        self._up_retry_level = 0
 
     def _anti_jam(self, position: CharacterPosition) -> None:
         if self.static_position and self.static_position.x == position.x and self.static_position.y == position.y:

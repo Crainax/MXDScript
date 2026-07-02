@@ -24,6 +24,7 @@ from mhscript_yjs.characters.actions import CharacterActions
 from mhscript_yjs.characters.controller import CharacterController
 from mhscript_yjs.core.config import ProjectConfig
 from mhscript_yjs.drivers.base import InputDevice
+from mhscript_yjs.drivers.controlled import ControlledInputDevice
 from mhscript_yjs.drivers.dry_run import DryRunDevice
 from mhscript_yjs.drivers.keycodes import keycode
 from mhscript_yjs.drivers.yjs import YjsDevice
@@ -1956,9 +1957,10 @@ def create_runner(
     options: dict[str, Any] | None = None,
     request_pause: Callable[[], None] | None = None,
 ) -> DailyRunner:
-    device: InputDevice = (
+    raw_device: InputDevice = (
         DryRunDevice(logger=logger) if dry_run else YjsDevice(settings=config.yjs, logger=logger)
     )
+    device: InputDevice = ControlledInputDevice(raw_device, control)
     capture = MssScreenCapture()
     matcher = TemplateMatcher(capture=capture, logger=logger)
     effective_skip_delays = skip_delays and dry_run

@@ -16,8 +16,10 @@ from mhscript_yjs.scripts.daily.combine_main import (
     create_runner as create_daily_runner,
 )
 from mhscript_yjs.scripts.leveling.leveling import (
+    DEFAULT_LEVELING_OPTIONS,
     LEVELING_SCRIPT_ID,
     LEVELING_SCRIPT_NAME,
+    read_leveling_options_from_settings,
 )
 from mhscript_yjs.scripts.leveling.leveling import (
     create_runner as create_leveling_runner,
@@ -102,6 +104,7 @@ def get_script_definitions() -> tuple[ScriptDefinition, ...]:
             runner=_run_leveling_script,
             placeholder=False,
             requires_mouse_precision=False,
+            default_options=DEFAULT_LEVELING_OPTIONS,
         ),
         ScriptDefinition(
             id=DAILY_SCRIPT_ID,
@@ -262,6 +265,7 @@ def _run_leveling_script(context: ScriptRunContext) -> ScriptRunResult:
         logger=context.logger,
         control=context.control,
         options=dict(context.script_options),
+        options_provider=read_leveling_options_from_settings,
         request_pause=context.request_pause,
         emit_data=context.emit_data,
     )

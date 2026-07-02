@@ -16,6 +16,7 @@ from mhscript_yjs.runtime.timing import NullSleeper
 from mhscript_yjs.scripts.leveling.leveling import (
     LevelingRunner,
     read_leveling_potion_payload,
+    reset_leveling_potion_timer,
 )
 from mhscript_yjs.scripts.tool.rune_solver import RunePressAttempt, RuneSolverConfig
 from mhscript_yjs.vision.types import ImageGroup, MatchResult, Region
@@ -377,6 +378,43 @@ class LevelingScriptTests(unittest.TestCase):
             ]
             self.assertEqual(pressed_codes[:2], [keycode("p"), keycode("2")])
 
+    def test_clear_potion_timer_makes_current_job_due_immediately(self) -> None:
+        with _temporary_local_appdata():
+            payload = reset_leveling_potion_timer(Job.LYNN, now=50_000.0)
+
+            self.assertEqual(payload["potionJob"], "lynn")
+            self.assertEqual(payload["potionMinutesSinceLastUse"], 100)
+            self.assertEqual(
+                read_leveling_potion_payload(Job.LYNN, now=50_000.0)["potionMinutesSinceLastUse"],
+                100,
+            )
+
+    def test_auto_potion_option_is_checked_live_while_running(self) -> None:
+        with _temporary_local_appdata():
+            device = DryRunDevice()
+            enabled = False
+            runner = _runner(
+                LevelingMatcher(),
+                device=device,
+                options_provider=lambda: {"autoPotion": enabled},
+            )
+            runner._initialize_window()  # noqa: SLF001
+            runner.vars["CurrentJob"] = runner.vars["JobLynn"]
+            runner._wall_clock = lambda: 60_000.0  # type: ignore[method-assign]
+
+            runner._use_potion_if_ready()  # noqa: SLF001
+
+            self.assertEqual(device.actions, [])
+
+            enabled = True
+            runner._use_potion_if_ready()  # noqa: SLF001
+            pressed_codes = [
+                int(action.args[0])
+                for action in device.actions
+                if action.name == "press_key"
+            ]
+            self.assertEqual(pressed_codes[:2], [keycode("p"), keycode("2")])
+
 
 class _FakeController:
     def stand_attack(self) -> None:
@@ -405,6 +443,7 @@ def _runner(
     rune_solver: FakeRuneSolver | None = None,
     request_pause=lambda: None,
     emit_data=lambda payload: None,
+    options_provider=None,
 ) -> LevelingRunner:
     return LevelingRunner(
         config=load_config(load_local=False),
@@ -416,6 +455,7 @@ def _runner(
         request_pause=request_pause,
         rune_solver=rune_solver,  # type: ignore[arg-type]
         emit_data=emit_data,
+        options_provider=options_provider,
     )
 
 

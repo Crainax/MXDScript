@@ -23,6 +23,7 @@ class GuiApiTests(unittest.TestCase):
         self.assertEqual(state["settings"]["shortcuts"]["leveling"], "Ctrl+F10")
         self.assertEqual(state["settings"]["shortcuts"]["open_package"], "")
         self.assertEqual(state["settings"]["shortcuts"]["rune_capture"], "Ctrl+F7")
+        self.assertTrue(state["settings"]["scriptOptions"]["leveling"]["autoPotion"])
         self.assertEqual(
             state["settings"]["scriptOptions"]["rune_capture"]["outputDir"],
             r"protype\RuneInstance",
@@ -40,6 +41,14 @@ class GuiApiTests(unittest.TestCase):
 
         self.assertFalse(response["ok"])
         self.assertIn("Esc", response["error"])
+
+    def test_clear_leveling_potion_resets_timer_to_100_minutes(self) -> None:
+        with _temporary_local_appdata():
+            response = GuiApi().clear_leveling_potion()
+
+        self.assertTrue(response["ok"])
+        self.assertEqual(response["scriptData"]["leveling"]["potionJob"], "lynn")
+        self.assertEqual(response["scriptData"]["leveling"]["potionMinutesSinceLastUse"], 100)
 
     def test_save_shortcuts_allows_empty_to_disable_hotkey(self) -> None:
         with _temporary_local_appdata():

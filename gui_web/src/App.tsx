@@ -24,6 +24,7 @@ import {
   SquareTerminal,
 } from "lucide-react";
 import {
+  clearLevelingPotion,
   getState,
   openLogDir,
   openPath,
@@ -291,6 +292,19 @@ export function App() {
     [selectedScript, settings],
   );
 
+  const handleClearLevelingPotion = useCallback(async () => {
+    try {
+      const payload = await clearLevelingPotion();
+      setScriptData((current) => ({
+        ...current,
+        [LEVELING_SCRIPT_ID]: payload,
+      }));
+      setMessage("吃药时间已重置为100分钟前");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "重置吃药时间失败");
+    }
+  }, []);
+
   const handleShortcutCapture = useCallback(
     async (scriptId: string, event: ReactKeyboardEvent<HTMLButtonElement>) => {
       event.preventDefault();
@@ -425,7 +439,12 @@ export function App() {
               <DailyOptionsPanel options={selectedScriptOptions} onChange={updateSelectedScriptOption} />
             ) : null}
             {selectedScript?.id === LEVELING_SCRIPT_ID ? (
-              <LevelingOptionsPanel data={scriptData[selectedScript.id]} />
+              <LevelingOptionsPanel
+                options={selectedScriptOptions}
+                data={scriptData[selectedScript.id]}
+                onChange={updateSelectedScriptOption}
+                onClearPotion={() => void handleClearLevelingPotion()}
+              />
             ) : null}
             {selectedScript?.id === IMAGE_RECOGNITION_SCRIPT_ID ? (
               <ImageRecognitionOptionsPanel
@@ -644,7 +663,12 @@ function DailyOptionsPanel(props: {
   );
 }
 
-function LevelingOptionsPanel(props: { data?: Record<string, unknown> }) {
+function LevelingOptionsPanel(props: {
+  options: Record<string, ScriptOptionValue>;
+  data?: Record<string, unknown>;
+  onChange: (key: string, value: ScriptOptionValue) => void;
+  onClearPotion: () => void;
+}) {
   const [nowMs, setNowMs] = useState(() => Date.now());
 
   useEffect(() => {
@@ -657,6 +681,7 @@ function LevelingOptionsPanel(props: { data?: Record<string, unknown> }) {
   const payloadMinutes = payloadNumber(props.data, "potionMinutesSinceLastUse");
   const minutes =
     lastUsedAt === null ? payloadMinutes : Math.max(0, Math.floor((nowMs / 1000 - lastUsedAt) / 60));
+  const autoPotion = optionBoolean(props.options.autoPotion, true);
 
   return (
     <section className="debug-options-panel">
@@ -665,6 +690,19 @@ function LevelingOptionsPanel(props: { data?: Record<string, unknown> }) {
           <div className="category-label">脚本配置</div>
           <h2>练级循环</h2>
         </div>
+      </div>
+      <div className="leveling-potion-actions">
+        <label className="daily-option">
+          <input
+            type="checkbox"
+            checked={autoPotion}
+            onChange={(event) => props.onChange("autoPotion", event.target.checked)}
+          />
+          <span>吃药</span>
+        </label>
+        <button type="button" className="tool-button" onClick={props.onClearPotion}>
+          清空吃药
+        </button>
       </div>
       <div className="leveling-potion-label">{job}:上次吃药{formatPotionMinutes(minutes)}分钟前</div>
     </section>

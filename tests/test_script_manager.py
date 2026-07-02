@@ -38,6 +38,7 @@ class ScriptManagerTests(unittest.TestCase):
         self.assertEqual(scripts[0]["defaultShortcut"], "Ctrl+F10")
         self.assertFalse(scripts[0]["requiresMousePrecision"])
         self.assertFalse(scripts[0]["placeholder"])
+        self.assertTrue(scripts[0]["defaultOptions"]["autoPotion"])
         self.assertEqual(scripts[1]["id"], "daily_script")
         self.assertTrue(scripts[1]["requiresMousePrecision"])
         self.assertFalse(scripts[1]["placeholder"])

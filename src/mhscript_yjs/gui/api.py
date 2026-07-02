@@ -21,6 +21,7 @@ from mhscript_yjs.runtime.shortcuts import (
 from mhscript_yjs.scripts.leveling.leveling import (
     LEVELING_SCRIPT_ID,
     read_leveling_potion_payload,
+    reset_leveling_potion_timer,
 )
 
 
@@ -127,6 +128,14 @@ class GuiApi:
         settings["scriptOptions"] = _normalize_script_options(self.manager, current)
         _write_json(settings_path(), settings)
         return {"ok": True, "settings": settings}
+
+    def clear_leveling_potion(self) -> dict[str, Any]:
+        return {
+            "ok": True,
+            "scriptData": {
+                LEVELING_SCRIPT_ID: reset_leveling_potion_timer(),
+            },
+        }
 
     def open_log_dir(self) -> dict[str, Any]:
         return self._call(lambda: _open_path(logs_dir()))

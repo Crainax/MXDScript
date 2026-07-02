@@ -111,6 +111,9 @@ class GuiHttpServer:
                         )
                     )
                     return
+                if parsed.path == "/api/leveling/clear-potion":
+                    self._send_json(api.clear_leveling_potion())
+                    return
                 if parsed.path == "/api/open-log-dir":
                     self._send_json(api.open_log_dir())
                     return

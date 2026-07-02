@@ -93,6 +93,15 @@ export async function saveScriptOptions(
   return response.settings;
 }
 
+export async function clearLevelingPotion(): Promise<Record<string, unknown>> {
+  const response = await requestJson("/leveling/clear-potion", { method: "POST" });
+  const payload = response.scriptData?.leveling;
+  if (!response.ok || !payload) {
+    throw new Error(response.error ?? "重置吃药时间失败");
+  }
+  return payload;
+}
+
 export async function openLogDir(): Promise<void> {
   const response = await requestJson("/open-log-dir", { method: "POST" });
   if (!response.ok) {

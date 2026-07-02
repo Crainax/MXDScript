@@ -402,6 +402,21 @@ h2 {
   accent-color: var(--primary-strong);
 }
 
+.leveling-potion-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.leveling-potion-actions .daily-option {
+  margin: 0;
+}
+
+.leveling-potion-actions .tool-button {
+  min-width: 96px;
+}
+
 .leveling-potion-label {
   margin-top: 14px;
   border: 1px solid var(--border);

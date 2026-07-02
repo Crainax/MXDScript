@@ -18,7 +18,7 @@ from mhscript_yjs.drivers.controlled import ControlledInputDevice
 from mhscript_yjs.drivers.dry_run import DryRunDevice
 from mhscript_yjs.drivers.keycodes import keycode
 from mhscript_yjs.drivers.yjs import YjsDevice
-from mhscript_yjs.runtime.app_paths import app_data_dir
+from mhscript_yjs.runtime.app_paths import app_data_dir, settings_path
 from mhscript_yjs.runtime.control import RunControl, StopRequested
 from mhscript_yjs.runtime.logging import log_important
 from mhscript_yjs.runtime.timing import NullSleeper, Sleeper
@@ -30,9 +30,11 @@ from mhscript_yjs.windows.maple import WindowInfo
 
 LEVELING_SCRIPT_ID = "leveling"
 LEVELING_SCRIPT_NAME = "练级"
+DEFAULT_LEVELING_OPTIONS = {"autoPotion": True}
 SUPPORTED_LEVELING_MAPS = {101, 111, 121, 122, 132, 161, -232}
 POTION_INTERVAL_SECONDS = 30 * 60
 POTION_INTERVAL_MINUTES = POTION_INTERVAL_SECONDS // 60
+POTION_RESET_MINUTES = 100
 POTION_CONFIRM_IMAGES = (
     r"UI\OK.bmp",
     r"UI\OK2.bmp",
@@ -58,6 +60,38 @@ def read_leveling_potion_payload(
     if current_job is None:
         current_job = _normalize_potion_job(state.get("lastJob")) or Job.LYNN.value
     return _leveling_potion_payload_from_state(state, current_job, now=now)
+
+
+def reset_leveling_potion_timer(
+    job: Job | str | None = None,
+    *,
+    now: float | None = None,
+    minutes_ago: int = POTION_RESET_MINUTES,
+) -> dict[str, Any]:
+    state = _load_leveling_potion_state()
+    current_job = _normalize_potion_job(job)
+    if current_job is None:
+        current_job = _normalize_potion_job(state.get("lastJob")) or Job.LYNN.value
+    if now is None:
+        now = time.time()
+    used_at = max(1.0, float(now) - max(0, int(minutes_ago)) * 60)
+    next_state = _record_leveling_potion_use(state, current_job, used_at)
+    return _leveling_potion_payload_from_state(next_state, current_job, now=now)
+
+
+def read_leveling_options_from_settings() -> dict[str, Any]:
+    try:
+        raw_settings = json.loads(settings_path().read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return dict(DEFAULT_LEVELING_OPTIONS)
+    if not isinstance(raw_settings, dict):
+        return dict(DEFAULT_LEVELING_OPTIONS)
+
+    script_options = raw_settings.get("scriptOptions")
+    if not isinstance(script_options, dict):
+        return dict(DEFAULT_LEVELING_OPTIONS)
+    raw_options = script_options.get(LEVELING_SCRIPT_ID)
+    return _coerce_leveling_options(raw_options if isinstance(raw_options, Mapping) else None)
 
 
 def _load_leveling_potion_state() -> dict[str, Any]:
@@ -111,6 +145,29 @@ def _coerce_potion_timestamp(value: Any) -> float | None:
     if timestamp <= 0:
         return None
     return timestamp
+
+
+def _coerce_leveling_options(options: Mapping[str, Any] | None) -> dict[str, Any]:
+    raw_options = options or {}
+    return {
+        "autoPotion": _coerce_bool(
+            raw_options.get("autoPotion", DEFAULT_LEVELING_OPTIONS["autoPotion"]),
+            DEFAULT_LEVELING_OPTIONS["autoPotion"],
+        ),
+    }
+
+
+def _coerce_bool(value: Any, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off", ""}:
+            return False
+        return default
+    return bool(value)
 
 
 def _potion_last_used_at(state: Mapping[str, Any], job: str) -> float | None:
@@ -203,6 +260,7 @@ class LevelingRunner(DailyRunner):
         request_pause: Callable[[], None] | None = None,
         rune_solver: RuneSolver | None = None,
         emit_data: Callable[[Mapping[str, Any]], None] | None = None,
+        options_provider: Callable[[], Mapping[str, Any]] | None = None,
     ) -> None:
         super().__init__(
             config=config,
@@ -217,10 +275,13 @@ class LevelingRunner(DailyRunner):
             request_pause=request_pause,
             rune_solver=rune_solver,
         )
+        self._leveling_options_snapshot = _coerce_leveling_options(options)
+        self._options_provider = options_provider
         self.actions = CharacterActions(device, sleeper, logger)
         self.emit_data = emit_data or _noop_emit_data
         self._potion_state = _load_leveling_potion_state()
         self._last_potion_status_emit_at = 0.0
+        self._last_auto_potion_enabled: bool | None = None
 
     def run(self) -> LevelingScriptResult:
         try:
@@ -362,8 +423,12 @@ class LevelingRunner(DailyRunner):
         job = self._current_potion_job()
         if job is None:
             return
+        if not self._auto_potion_enabled():
+            self._emit_potion_status_if_needed()
+            return
 
         now = self._wall_clock()
+        self._potion_state = _load_leveling_potion_state()
         last_used_at = _potion_last_used_at(self._potion_state, job)
         if last_used_at is not None and now - last_used_at < POTION_INTERVAL_SECONDS:
             self._emit_potion_status_if_needed()
@@ -392,9 +457,25 @@ class LevelingRunner(DailyRunner):
             )
             if match is None:
                 return
-            log_important(self.logger, "[Leveling] 自动吃药确认弹窗：%s", match.image_path)
+            self.logger.info("[Leveling] 自动吃药确认弹窗：%s", match.image_path)
             self.device.press_key(keycode("enter"), 1)
             self.sleeper.delay_ms(200)
+
+    def _auto_potion_enabled(self) -> bool:
+        enabled = bool(self._current_leveling_options().get("autoPotion", True))
+        if self._last_auto_potion_enabled is not enabled:
+            self.logger.info("[Leveling] 自动吃药%s", "开启" if enabled else "关闭")
+            self._last_auto_potion_enabled = enabled
+        return enabled
+
+    def _current_leveling_options(self) -> dict[str, Any]:
+        if self._options_provider is None:
+            return dict(self._leveling_options_snapshot)
+        try:
+            return _coerce_leveling_options(self._options_provider())
+        except Exception as exc:
+            self.logger.warning("[Leveling] 读取实时配置失败，使用启动配置：%s", exc)
+            return dict(self._leveling_options_snapshot)
 
     def _current_potion_job(self) -> str | None:
         return _normalize_potion_job(self._active_job())
@@ -684,6 +765,7 @@ def create_runner(
     options: Mapping[str, Any] | None = None,
     request_pause: Callable[[], None] | None = None,
     emit_data: Callable[[Mapping[str, Any]], None] | None = None,
+    options_provider: Callable[[], Mapping[str, Any]] | None = None,
 ) -> LevelingRunner:
     raw_device: InputDevice = (
         DryRunDevice(logger=logger) if dry_run else YjsDevice(settings=config.yjs, logger=logger)
@@ -710,4 +792,5 @@ def create_runner(
         capture=capture,
         request_pause=request_pause,
         emit_data=emit_data,
+        options_provider=options_provider,
     )

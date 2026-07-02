@@ -5,6 +5,8 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from mhscript_yjs.characters import CharacterPosition, MoveTarget
+from mhscript_yjs.characters.actions import CharacterActions
+from mhscript_yjs.characters.navigation import PortalRoute, move_with_portal_navigation
 from mhscript_yjs.runtime.control import StopRequested
 from mhscript_yjs.runtime.logging import log_important
 from mhscript_yjs.scripts.daily.combine_main import create_runner as create_daily_runner
@@ -96,9 +98,23 @@ def run_coordinate_mover(context: ScriptRunContext) -> CoordinateMoverResult:
             raise RuntimeError("未检测到 Lynn/Lara 职业信息，无法移动坐标。")
 
         move_target = MoveTarget(target.x, target.y, x_tolerance=2, y_tolerance=1)
-        result = controller.move_to(move_target)
-        if result.last_position is not None:
-            runner._sync_character_position(result.last_position)
+        map_id: int | None = None
+        portal_route: PortalRoute | None = None
+        if move_mode == "Navi":
+            map_id = _detect_navi_map(runner)
+            result, portal_route = move_with_portal_navigation(
+                controller=controller,
+                actions=CharacterActions(runner.device, runner.sleeper, context.logger),
+                target=move_target,
+                map_id=map_id,
+                logger=context.logger,
+                position_sink=runner._sync_character_position,
+                log_prefix="[移动坐标.Navi]",
+            )
+        else:
+            result = controller.move_to(move_target)
+            if result.last_position is not None:
+                runner._sync_character_position(result.last_position)
 
         state = "reached" if result.reached else "failed"
         message = "已到达目标坐标" if result.reached else f"未到达目标坐标：{result.reason}"
@@ -114,6 +130,8 @@ def run_coordinate_mover(context: ScriptRunContext) -> CoordinateMoverResult:
                 job=job.value,
                 attempts=result.attempts,
                 last_position=result.last_position,
+                map_id=map_id,
+                portal_route=portal_route,
             ),
         }
         context.emit_data(payload)
@@ -167,9 +185,59 @@ def _coerce_target(options: Mapping[str, Any]) -> CoordinateTarget | None:
 
 def _coerce_move_mode(value: Any) -> str:
     text = str(value).strip().lower()
+    if text == "navi":
+        return "Navi"
     if text == "move":
         return "Move"
     return "MoveB"
+
+
+def _detect_navi_map(runner: Any) -> int | None:
+    if _match_navi_map(runner, "AUT3"):
+        teleport = _navi_teleport_position(runner)
+        if teleport == (-96, 100):
+            return 121
+        if teleport == (-105, 124):
+            return 122
+        return None
+    if _match_navi_map(runner, "AUT4"):
+        if _navi_teleport_position(runner) == (-111, 118):
+            return 132
+        return None
+    if _match_navi_map(runner, "AUT7"):
+        return 161
+    return None
+
+
+def _match_navi_map(runner: Any, name: str) -> bool:
+    return (
+        runner._match_optional(
+            f"CoordinateMover.Map.{name}",
+            (
+                fr"E:\MHImg\Maps\{name}.bmp",
+                fr"Maps\{name}.bmp",
+            ),
+            runner._region("x1", "y1", "x2", "y2"),
+        )
+        is not None
+    )
+
+
+def _navi_teleport_position(runner: Any) -> tuple[int, int] | None:
+    region = runner._region("x1", "y1", "x2", "y2")
+    anchor = runner._match_optional(
+        "CoordinateMover.MapAnchor",
+        (r"E:\MHImg\MapAnchor.bmp",),
+        region,
+    )
+    teleport = runner._match_optional(
+        "CoordinateMover.Teleport",
+        (r"E:\MHImg\Teleport.bmp",),
+        region,
+    )
+    if anchor is None or teleport is None:
+        return None
+    return teleport.x - anchor.x, teleport.y - anchor.y
 
 
 def _move_status(
@@ -181,6 +249,8 @@ def _move_status(
     job: str | None = None,
     attempts: int | None = None,
     last_position: CharacterPosition | None = None,
+    map_id: int | None = None,
+    portal_route: PortalRoute | None = None,
 ) -> dict[str, Any]:
     status: dict[str, Any] = {
         "state": state,
@@ -193,6 +263,15 @@ def _move_status(
         status["job"] = job
     if attempts is not None:
         status["attempts"] = attempts
+    if map_id is not None:
+        status["mapId"] = map_id
+    if portal_route is not None:
+        status["portal"] = {
+            "fromX": portal_route.entrance[0],
+            "fromY": portal_route.entrance[1],
+            "toX": portal_route.exit[0],
+            "toY": portal_route.exit[1],
+        }
     if last_position is not None:
         status["lastPosition"] = {
             "x": last_position.x,

@@ -154,7 +154,7 @@ def get_script_definitions() -> tuple[ScriptDefinition, ...]:
             id=COORDINATE_MOVER_SCRIPT_ID,
             name="移动坐标",
             category="测试",
-            description="按目标坐标执行一次 Move 或 MoveB 移动。",
+            description="按目标坐标执行一次 Move、MoveB 或 Navi 移动。",
             module="mhscript_yjs.scripts.tool.coordinate_mover",
             default_shortcut="",
             runner=_run_coordinate_mover,

@@ -147,14 +147,14 @@ class GuiApiTests(unittest.TestCase):
             api = GuiApi()
             response = api.save_script_options(
                 "coordinate_mover",
-                {"targetX": "123", "targetY": "45", "moveMode": "Move"},
+                {"targetX": "123", "targetY": "45", "moveMode": "Navi"},
             )
             state = GuiApi().get_state()
 
         self.assertTrue(response["ok"])
         self.assertEqual(state["settings"]["scriptOptions"]["coordinate_mover"]["targetX"], "123")
         self.assertEqual(state["settings"]["scriptOptions"]["coordinate_mover"]["targetY"], "45")
-        self.assertEqual(state["settings"]["scriptOptions"]["coordinate_mover"]["moveMode"], "Move")
+        self.assertEqual(state["settings"]["scriptOptions"]["coordinate_mover"]["moveMode"], "Navi")
 
     def test_rune_capture_options_persist_directory_and_interval(self) -> None:
         with _temporary_local_appdata():

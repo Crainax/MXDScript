@@ -56,6 +56,8 @@ const IMAGE_RECOGNITION_SCRIPT_ID = "image_recognition";
 const COORDINATE_DETECTOR_SCRIPT_ID = "coordinate_detector";
 const COORDINATE_MOVER_SCRIPT_ID = "coordinate_mover";
 const RUNE_CAPTURE_SCRIPT_ID = "rune_capture";
+const COORDINATE_MOVE_MODES = ["Move", "MoveB", "Navi"] as const;
+type CoordinateMoveMode = (typeof COORDINATE_MOVE_MODES)[number];
 const DAILY_OPTION_ITEMS = [
   { key: "dailyQuest", label: "日常任务" },
   { key: "gugu", label: "菇菇神社" },
@@ -866,7 +868,7 @@ function CoordinateMoverOptionsPanel(props: {
 }) {
   const targetXValue = optionString(props.options.targetX, "");
   const targetYValue = optionString(props.options.targetY, "");
-  const moveMode = optionString(props.options.moveMode, "MoveB") === "Move" ? "Move" : "MoveB";
+  const moveMode = coerceCoordinateMoveMode(optionString(props.options.moveMode, "MoveB"));
   const [targetXText, setTargetXText] = useState(targetXValue);
   const [targetYText, setTargetYText] = useState(targetYValue);
 
@@ -932,7 +934,7 @@ function CoordinateMoverOptionsPanel(props: {
       <div className="coordinate-move-panel">
         <div className="coordinate-move-title">移动方式</div>
         <div className="coordinate-mode-options">
-          {(["Move", "MoveB"] as const).map((mode) => (
+          {COORDINATE_MOVE_MODES.map((mode) => (
             <label className="daily-option" key={mode}>
               <input
                 type="checkbox"
@@ -1401,6 +1403,12 @@ function payloadString(payload: Record<string, unknown> | undefined, key: string
   return typeof value === "string" ? value : fallback;
 }
 
+function coerceCoordinateMoveMode(value: string): CoordinateMoveMode {
+  return COORDINATE_MOVE_MODES.includes(value as CoordinateMoveMode)
+    ? (value as CoordinateMoveMode)
+    : "MoveB";
+}
+
 function payloadNumber(payload: Record<string, unknown> | undefined | null, key: string): number | null {
   const value = payload?.[key];
   return typeof value === "number" && Number.isFinite(value) ? value : null;
@@ -1450,9 +1458,24 @@ function formatMoveStatus(status: Record<string, unknown>): string {
   const targetX = payloadNumber(status, "targetX");
   const targetY = payloadNumber(status, "targetY");
   const attempts = payloadNumber(status, "attempts");
+  const mapId = payloadNumber(status, "mapId");
+  const portal = payloadRecord(status, "portal");
   const target = targetX !== null && targetY !== null ? `(${targetX}, ${targetY})` : "";
+  const mapText = mapId !== null ? `map ${mapId}` : "";
+  const portalText = portal ? formatPortalLine(portal) : "";
   const attemptsText = attempts !== null ? `尝试 ${attempts}` : "";
-  return [state, mode, target, attemptsText, message].filter(Boolean).join(" · ");
+  return [state, mode, target, mapText, portalText, attemptsText, message].filter(Boolean).join(" · ");
+}
+
+function formatPortalLine(portal: Record<string, unknown>): string {
+  const fromX = payloadNumber(portal, "fromX");
+  const fromY = payloadNumber(portal, "fromY");
+  const toX = payloadNumber(portal, "toX");
+  const toY = payloadNumber(portal, "toY");
+  if (fromX === null || fromY === null || toX === null || toY === null) {
+    return "";
+  }
+  return `portal (${fromX},${fromY})->(${toX},${toY})`;
 }
 
 function formatMaybeNumber(value: number | null): string {

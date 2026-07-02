@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from mhscript_yjs.characters import CharacterPosition, LaraController, MoveTarget
-from mhscript_yjs.characters.base import Job
+from mhscript_yjs.characters.base import Job, MoveResult
 from mhscript_yjs.core.config import load_config
 from mhscript_yjs.drivers.dry_run import DryRunDevice
 from mhscript_yjs.drivers.keycodes import keycode
@@ -199,6 +199,38 @@ class LevelingScriptTests(unittest.TestCase):
         self.assertIn("前往放亚努斯(球),第2个", log_text)
         self.assertIn("前往放亚努斯(球),第3个", log_text)
 
+    def test_aut3_left_to_right_navigation_uses_shared_navi(self) -> None:
+        device = DryRunDevice()
+        runner = _runner(LevelingMatcher(), device=device)
+        runner.vars["map"] = 122
+        controller = _PortalProbeController(
+            positions=[
+                CharacterPosition(100, 125, 0, 0, 0, 0),
+                CharacterPosition(30, 125, 0, 0, 0, 0),
+                CharacterPosition(-94, 82, 0, 0, 0, 0),
+            ]
+        )
+        runner._active_character_controller = lambda: controller  # type: ignore[method-assign]
+
+        runner._aut_navi(-100, 82, tolerance=4, y_tolerance=0)  # noqa: SLF001
+
+        move_targets = [
+            (target.x, target.y, target.x_tolerance, target.y_tolerance)
+            for target in controller.move_targets
+        ]
+        self.assertEqual(
+            move_targets,
+            [(28, 125, 2, 0), (-100, 82, 4, 0)],
+        )
+        key_downs = [int(action.args[0]) for action in device.actions if action.name == "key_down"]
+        self.assertEqual(key_downs, [keycode("Left")])
+        press_keys = [
+            int(action.args[0])
+            for action in device.actions
+            if action.name == "press_key"
+        ]
+        self.assertEqual(press_keys, [keycode("Up"), keycode("Up"), keycode("Up")])
+
     def test_process_unified_map_logs_attack_return_wiggle_and_key7(self) -> None:
         device = DryRunDevice()
         runner = _runner(LevelingMatcher(), device=device)
@@ -349,6 +381,21 @@ class LevelingScriptTests(unittest.TestCase):
 class _FakeController:
     def stand_attack(self) -> None:
         return None
+
+
+class _PortalProbeController:
+    def __init__(self, positions: list[CharacterPosition]) -> None:
+        self.positions = positions
+        self.move_targets: list[MoveTarget] = []
+
+    def locate(self, *, recover: bool = True, use_cache: bool = True) -> CharacterPosition | None:
+        if not self.positions:
+            return None
+        return self.positions.pop(0)
+
+    def move_to(self, target: MoveTarget) -> MoveResult:
+        self.move_targets.append(target)
+        return MoveResult(True, "reached", 1, CharacterPosition(target.x, target.y, 0, 0, 0, 0))
 
 
 def _runner(

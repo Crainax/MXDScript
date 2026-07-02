@@ -11,6 +11,7 @@ from typing import Any
 from mhscript_yjs.characters import MoveTarget
 from mhscript_yjs.characters.actions import CharacterActions
 from mhscript_yjs.characters.base import Job
+from mhscript_yjs.characters.navigation import move_with_portal_navigation
 from mhscript_yjs.core.config import ProjectConfig
 from mhscript_yjs.drivers.base import InputDevice
 from mhscript_yjs.drivers.controlled import ControlledInputDevice
@@ -247,7 +248,6 @@ class LevelingRunner(DailyRunner):
                 "yTolerance": 0,
                 "stoneTime": 0,
                 "yanusTime": 0,
-                "pick1Time": now,
                 "Key7Time": 0,
                 "RuneCooldown": 0,
                 "patrolTime": now,
@@ -532,61 +532,32 @@ class LevelingRunner(DailyRunner):
         tolerance: int,
         y_tolerance: int = 0,
     ) -> None:
-        map_id = int(self.vars.get("map", 0))
-        position = self._locate_character()
-        if position is not None:
-            if map_id == 122:
-                if target_x <= -39 and position.x >= -7:
-                    self._move_via_portal(28, 125, -94, 82)
-                elif target_x >= -7 and position.x <= -39:
-                    if (
-                        self._get_timestamp() - float(self.vars.get("pick1Time", 0)) > 65
-                        and target_y >= 105
-                    ):
-                        self.vars["pick1Time"] = self._get_timestamp()
-                    else:
-                        self._move_via_portal(-78, 125, 39, 80)
-            elif map_id == 132:
-                if target_x < -55 and position.x > 2:
-                    self._move_via_portal(28, 120, -89, 91)
-                elif target_x > 2 and position.x < -55:
-                    self._move_via_portal(-89, 91, 38, 91)
-            elif map_id == 161:
-                if target_x <= 73 and position.x >= 126:
-                    self._move_via_portal(140, 114, 37, 94)
-                elif target_x >= 126 and position.x <= 73:
-                    self._move_via_portal(37, 114, 140, 95)
-
-        self._move_to(target_x, target_y, x_tolerance=tolerance, y_tolerance=y_tolerance)
-
-    def _move_via_portal(self, approach_x: int, approach_y: int, exit_x: int, exit_y: int) -> None:
-        self._move_to(approach_x, approach_y, x_tolerance=2, y_tolerance=0)
-        self.actions.hold_random("Up", 120, 122)
-        self.sleeper.delay_random_ms(231, 234)
-        position = self._locate_character()
-        if (
-            position is not None
-            and abs(position.x - exit_x) <= 12
-            and abs(position.y - exit_y) <= 3
-        ):
-            self.logger.info("[Leveling] 传送点通过完成：(%s,%s)", position.x, position.y)
-
-    def _move_to(self, x: int, y: int, *, x_tolerance: int, y_tolerance: int = 0) -> None:
         controller = self._active_character_controller()
         if controller is None:
             raise RuntimeError("Leveling requires an initialized Lara/Lynn controller.")
-        result = controller.move_to(
-            MoveTarget(
-                x=int(x),
-                y=int(y),
-                x_tolerance=int(x_tolerance),
-                y_tolerance=int(y_tolerance),
-            )
+        target = MoveTarget(
+            x=int(target_x),
+            y=int(target_y),
+            x_tolerance=int(tolerance),
+            y_tolerance=int(y_tolerance),
         )
-        if result.last_position is not None:
-            self._sync_character_position(result.last_position)
+        result, _portal_route = move_with_portal_navigation(
+            controller=controller,
+            actions=self.actions,
+            target=target,
+            map_id=int(self.vars.get("map", 0)),
+            logger=self.logger,
+            position_sink=self._sync_character_position,
+            log_prefix="[Leveling.Navi]",
+        )
         if not result.reached:
-            self.logger.warning("[Leveling] 移动到 (%s,%s) 未完成：%s", x, y, result.reason)
+            self.logger.warning(
+                "[Leveling] 绉诲姩鍒?(%s,%s) 鏈畬鎴愶細%s",
+                target_x,
+                target_y,
+                result.reason,
+            )
+        return
 
     def _locate_character(self):
         controller = self._active_character_controller()

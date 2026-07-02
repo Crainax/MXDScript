@@ -22,6 +22,8 @@ protype/
 assets/*
 !assets/app_icon.ico
 !assets/app_icon.png
+!assets/Maps/
+!assets/Maps/**
 !assets/Rune/
 !assets/Rune/rune_template_model.npz
 build/

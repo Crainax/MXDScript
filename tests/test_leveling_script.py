@@ -26,9 +26,11 @@ from mhscript_yjs.windows.maple import WindowInfo
 class LevelingMatcher:
     enabled_groups: set[str] = field(default_factory=set)
     calls: list[str] = field(default_factory=list)
+    groups: dict[str, ImageGroup] = field(default_factory=dict)
 
     def match_any(self, group: ImageGroup, region: Region) -> MatchResult | None:
         self.calls.append(group.name)
+        self.groups[group.name] = group
         if group.name in self.enabled_groups or self._matches_lara_feature(group):
             return MatchResult(
                 group=group.name,
@@ -55,6 +57,48 @@ class LevelingScriptTests(unittest.TestCase):
 
         self.assertEqual(runner.vars["CurrentJob"], runner.vars["JobLara"])
         self.assertIsInstance(runner._active_character_controller(), LaraController)  # noqa: SLF001
+
+    def test_map_detection_uses_leveling_map_templates(self) -> None:
+        matcher = LevelingMatcher()
+        runner = _runner(matcher)
+        runner._initialize_window()  # noqa: SLF001
+
+        runner._match_map("AUT1")  # noqa: SLF001
+
+        group = matcher.groups["Leveling.Map.AUT1"]
+        paths = {str(path).replace("/", "\\") for path in group.paths}
+        self.assertTrue(any(path.endswith(r"Maps\AUT1.bmp") for path in paths))
+        self.assertFalse(any(path.endswith(r"UI\F2\Map\AUT1.bmp") for path in paths))
+
+    def test_potion_confirmation_matches_all_relative_confirm_templates(self) -> None:
+        matcher = LevelingMatcher()
+        runner = _runner(matcher)
+        runner._initialize_window()  # noqa: SLF001
+
+        runner._confirm_potion_dialog_if_present()  # noqa: SLF001
+
+        group = matcher.groups["Leveling.PotionDialog"]
+        paths = {str(path).replace("/", "\\") for path in group.paths}
+        self.assertTrue(any(path.endswith(r"UI\OK.bmp") for path in paths))
+        self.assertTrue(any(path.endswith(r"UI\OK2.bmp") for path in paths))
+        self.assertTrue(any(path.endswith(r"UI\Potion_Confirm.bmp") for path in paths))
+
+    def test_map_detection_skips_unused_leveling_branches(self) -> None:
+        matcher = LevelingMatcher({"Leveling.Map.AUT5"})
+        runner = _runner(matcher)
+        runner._initialize_window()  # noqa: SLF001
+
+        map_id = runner._confirm_aut_map()  # noqa: SLF001
+
+        self.assertEqual(map_id, 0)
+        self.assertNotIn("Leveling.Map.AUT5", matcher.calls)
+
+    def test_unknown_aut3_and_aut4_submaps_remain_unconfigured(self) -> None:
+        runner = _runner(LevelingMatcher())
+        runner._teleport_position = lambda: None  # type: ignore[method-assign]
+
+        self.assertEqual(runner._confirm_aut3_submap(), 0)  # noqa: SLF001
+        self.assertEqual(runner._confirm_aut4_submap(), 0)  # noqa: SLF001
 
     def test_release_rune_logs_and_starts_auto_solver(self) -> None:
         runner = _runner(LevelingMatcher({"解符文.检测符文"}))

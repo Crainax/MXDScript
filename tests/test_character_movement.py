@@ -114,7 +114,9 @@ class CharacterMovementTests(unittest.TestCase):
         with self.assertLogs(logger_name, level="INFO") as logs:
             self.assertIsNone(tracker.locate(recover=False, use_cache=False))
 
-        self.assertTrue(any("INFO:" in line and "实时定位本帧未命中" in line for line in logs.output))
+        self.assertTrue(
+            any("INFO:" in line and "实时定位本帧未命中" in line for line in logs.output)
+        )
         self.assertFalse(any(line.startswith("WARNING:") for line in logs.output))
 
     def test_normal_locate_failure_still_logs_warning(self) -> None:
@@ -131,6 +133,20 @@ class CharacterMovementTests(unittest.TestCase):
             self.assertIsNone(tracker.locate(recover=False, use_cache=True))
 
         self.assertTrue(any("定位失败 me=no anchor=no" in line for line in logs.output))
+
+    def test_recover_locate_failure_does_not_move_mouse(self) -> None:
+        device = DryRunDevice()
+        tracker = PositionTracker(
+            window=WindowInfo(hwnd=1, title="MapleStory", x=0, y=0, width=800, height=600),
+            match_image=lambda *_args: None,
+            device=device,
+            sleeper=NullSleeper(),
+            logger=logging.getLogger("test.character.locate_no_mouse"),
+        )
+
+        self.assertIsNone(tracker.locate(recover=True, use_cache=False))
+
+        self.assertNotIn("move_to", [action.name for action in device.actions])
 
 
 class _ProbeController(CharacterController):

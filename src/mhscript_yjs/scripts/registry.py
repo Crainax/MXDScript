@@ -101,7 +101,7 @@ def get_script_definitions() -> tuple[ScriptDefinition, ...]:
             default_shortcut="Ctrl+F10",
             runner=_run_leveling_script,
             placeholder=False,
-            requires_mouse_precision=True,
+            requires_mouse_precision=False,
         ),
         ScriptDefinition(
             id=DAILY_SCRIPT_ID,
@@ -159,7 +159,7 @@ def get_script_definitions() -> tuple[ScriptDefinition, ...]:
             default_shortcut="",
             runner=_run_coordinate_mover,
             placeholder=False,
-            requires_mouse_precision=True,
+            requires_mouse_precision=False,
             default_options=DEFAULT_COORDINATE_MOVER_OPTIONS,
         ),
         ScriptDefinition(

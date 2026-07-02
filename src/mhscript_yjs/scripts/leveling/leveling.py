@@ -34,6 +34,7 @@ POTION_INTERVAL_MINUTES = POTION_INTERVAL_SECONDS // 60
 POTION_CONFIRM_IMAGES = (
     r"UI\OK.bmp",
     r"UI\OK2.bmp",
+    r"UI\Potion_Confirm.bmp",
 )
 
 
@@ -263,9 +264,6 @@ class LevelingRunner(DailyRunner):
                 raise RuntimeError("Leveling execution step limit exceeded.")
 
             map_id = int(self.vars.get("map", 0))
-            if map_id < 0:
-                self.execute_sub("Accept")
-
             self._place_reincarnation_stone_if_ready()
 
             if map_id in SUPPORTED_LEVELING_MAPS:
@@ -552,11 +550,6 @@ class LevelingRunner(DailyRunner):
                     self._move_via_portal(28, 120, -89, 91)
                 elif target_x > 2 and position.x < -55:
                     self._move_via_portal(-89, 91, 38, 91)
-            elif map_id == 141:
-                if target_x <= -49 and position.x >= 27:
-                    self._move_via_portal(40, 92, -71, 97)
-                elif target_x >= 27 and position.x <= -49:
-                    self._move_via_portal(-71, 97, 40, 92)
             elif map_id == 161:
                 if target_x <= 73 and position.x >= 126:
                     self._move_via_portal(140, 114, 37, 94)
@@ -630,8 +623,6 @@ class LevelingRunner(DailyRunner):
 
     def _confirm_aut_map(self) -> int:
         self.vars["map"] = 0
-        if self._match_map("ARC4"):
-            self.vars["map"] = 41
         if self._match_map("AUT1"):
             self.vars["map"] = 101
         if self._match_map("AUT2"):
@@ -640,8 +631,6 @@ class LevelingRunner(DailyRunner):
             self.vars["map"] = self._confirm_aut3_submap()
         if self._match_map("AUT4"):
             self.vars["map"] = self._confirm_aut4_submap()
-        if self._match_map("AUT5"):
-            self.vars["map"] = 141
         if self._match_map("AUT7"):
             self.vars["map"] = 161
         if self._match_map("CityWeek"):
@@ -656,7 +645,6 @@ class LevelingRunner(DailyRunner):
                 (
                     fr"E:\MHImg\Maps\{name}.bmp",
                     fr"Maps\{name}.bmp",
-                    fr"UI\F2\Map\{name}.bmp",
                 ),
                 self._region("x1", "y1", "x2", "y2"),
             )
@@ -669,13 +657,13 @@ class LevelingRunner(DailyRunner):
             return 121
         if teleport == (-105, 124):
             return 122
-        return 120
+        return 0
 
     def _confirm_aut4_submap(self) -> int:
         teleport = self._teleport_position()
         if teleport == (-111, 118):
             return 132
-        return 131
+        return 0
 
     def _teleport_position(self) -> tuple[int, int] | None:
         region = self._region("x1", "y1", "x2", "y2")

@@ -10,7 +10,6 @@ from mhscript_yjs.runtime.timing import Sleeper
 from mhscript_yjs.vision.types import MatchResult, Region
 from mhscript_yjs.windows.maple import WindowInfo
 
-
 ImageMatchFn = Callable[[str, tuple[str, ...], Region, float], MatchResult | None]
 CoordinateMatchFn = Callable[[Region, float], tuple[MatchResult | None, MatchResult | None]]
 PositionSink = Callable[["CharacterPosition"], None]
@@ -73,11 +72,6 @@ class PositionTracker:
                     cached = self._cached_position()
                     if cached is not None:
                         return cached
-            if me is None:
-                self.device.move_to(
-                    self.window.x + self.window.width // 2,
-                    self.window.y + self.window.height // 2,
-                )
 
         if me is None or anchor is None:
             self._log_locate_failure(recover=recover, use_cache=use_cache, me=me, anchor=anchor)
